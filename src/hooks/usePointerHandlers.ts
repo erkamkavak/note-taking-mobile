@@ -20,7 +20,9 @@ type PointerCacheEntry = {
 type PinchState = {
   initialDistance: number
   initialScale: number
-  focus: StrokePoint
+  initialOffsetX: number
+  initialOffsetY: number
+  initialMidpoint: { x: number; y: number }
 }
 
 type PointerHandlersOptions = {
@@ -113,13 +115,12 @@ export const usePointerHandlers = ({
           x: (points[0]?.x ?? 0 + (points[1]?.x ?? 0)) / 2,
           y: (points[0]?.y ?? 0 + (points[1]?.y ?? 0)) / 2,
         }
-        const focusPoint = toCanvasPoint(midpoint.x, midpoint.y)
-        if (focusPoint) {
-          pinchStateRef.current = {
-            initialDistance: distance,
-            initialScale: viewport.scale,
-            focus: focusPoint,
-          }
+        pinchStateRef.current = {
+          initialDistance: distance,
+          initialScale: viewport.scale,
+          initialOffsetX: viewport.offsetX,
+          initialOffsetY: viewport.offsetY,
+          initialMidpoint: midpoint,
         }
         return
       }
@@ -217,9 +218,8 @@ export const usePointerHandlers = ({
           x: (points[0]?.x ?? 0 + (points[1]?.x ?? 0)) / 2,
           y: (points[0]?.y ?? 0 + (points[1]?.y ?? 0)) / 2,
         }
-        const focusPoint = toCanvasPoint(midpoint.x, midpoint.y)
         const pinchState = pinchStateRef.current
-        if (!pinchState || !focusPoint) return
+        if (!pinchState) return
 
         const scaleDelta = distance / (pinchState.initialDistance || Number.EPSILON)
         const nextScale = clamp(
@@ -228,12 +228,19 @@ export const usePointerHandlers = ({
           MAX_SCALE,
         )
 
-        setViewport((prev) => ({
-          ...prev,
-          scale: nextScale,
-          offsetX: 0,
-          offsetY: 0,
-        }))
+        const deltaMidpointX = midpoint.x - pinchState.initialMidpoint.x
+        const deltaMidpointY = midpoint.y - pinchState.initialMidpoint.y
+
+        setViewport(() => {
+          if (nextScale <= 1) {
+            return { scale: nextScale, offsetX: 0, offsetY: 0 }
+          }
+          return {
+            scale: nextScale,
+            offsetX: pinchState.initialOffsetX + deltaMidpointX,
+            offsetY: pinchState.initialOffsetY + deltaMidpointY,
+          }
+        })
         return
       }
 

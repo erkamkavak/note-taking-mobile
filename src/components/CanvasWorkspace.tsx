@@ -7,7 +7,6 @@ import {
 } from 'react'
 import type { Note, Stroke, StrokePoint, StrokeTool } from '../types/note'
 import { translateStroke, cloneStrokes } from '../utils/canvasDrawing'
-import { clamp } from '../utils/canvasGeometry'
 import { PenTool, HighlighterTool, EraserTool, SelectorTool } from '../tools'
 import type { SelectionState } from '../tools'
 import Toolbar from './Toolbar'
@@ -15,6 +14,8 @@ import DebugPanel from './DebugPanel'
 import { useCanvasRenderer } from '../hooks/useCanvasRenderer'
 import { usePointerHandlers } from '../hooks/usePointerHandlers'
 import { useCanvasExport } from '../hooks/useCanvasExport'
+import { useViewportZoom } from '../hooks/useViewportZoom'
+import { loadSettings, persistSettings, type Settings as SettingsType } from '../utils/settingsStorage'
 
 type ToolType = StrokeTool | 'selector'
 
@@ -42,13 +43,6 @@ type Viewport = {
 const PEN_COLORS = ['#1C1C1E', '#007AFF', '#34C759', '#FF8C00', '#FF2D55']
 const HIGHLIGHTER_COLORS = ['#FFF6A1', '#CDE6FF', '#FFE5B9', '#FDD7FF']
 const SELECTION_COLORS = Array.from(new Set([...PEN_COLORS, ...HIGHLIGHTER_COLORS]))
-
-const DEFAULTS = {
-  tool: 'pen' as ToolType,
-  pen: { color: '#1C1C1E', size: 4 },
-  highlighter: { color: '#FFF6A1', size: 18, opacity: 0.32 },
-  eraser: { size: 26 },
-}
 
 const MIN_SCALE = 0.6
 const MAX_SCALE = 3.5
@@ -147,19 +141,20 @@ const CanvasWorkspace = ({
   const eraserToolRef = useRef<EraserTool | null>(null)
   const selectorToolRef = useRef<SelectorTool | null>(null)
 
-  const [tool, setTool] = useState<ToolType>(DEFAULTS.tool)
-  const [penColor, setPenColor] = useState(DEFAULTS.pen.color)
-  const [penSize, setPenSize] = useState(DEFAULTS.pen.size)
+  const initialSettings = useMemo(() => loadSettings(), [])
+  const [tool, setTool] = useState<ToolType>(initialSettings.tool)
+  const [penColor, setPenColor] = useState(initialSettings.pen.color)
+  const [penSize, setPenSize] = useState(initialSettings.pen.size)
   const [highlighterColor, setHighlighterColor] = useState(
-    DEFAULTS.highlighter.color,
+    initialSettings.highlighter.color,
   )
   const [highlighterSize, setHighlighterSize] = useState(
-    DEFAULTS.highlighter.size,
+    initialSettings.highlighter.size,
   )
   const [highlighterOpacity, setHighlighterOpacity] = useState(
-    DEFAULTS.highlighter.opacity,
+    initialSettings.highlighter.opacity,
   )
-  const [eraserSize, setEraserSize] = useState(DEFAULTS.eraser.size)
+  const [eraserSize, setEraserSize] = useState(initialSettings.eraser.size)
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null)
   const [viewport, setViewport] = useState<Viewport>({
@@ -405,6 +400,16 @@ const CanvasWorkspace = ({
     }
   }, [])
 
+  useEffect(() => {
+    const settings: SettingsType = {
+      tool,
+      pen: { color: penColor, size: penSize },
+      highlighter: { color: highlighterColor, size: highlighterSize, opacity: highlighterOpacity },
+      eraser: { size: eraserSize },
+    }
+    persistSettings(settings)
+  }, [tool, penColor, penSize, highlighterColor, highlighterSize, highlighterOpacity, eraserSize])
+
   const handleToolChange = useCallback((nextTool: ToolType) => {
     setTool(nextTool)
     if (nextTool !== 'selector') {
@@ -570,31 +575,11 @@ const CanvasWorkspace = ({
   const canUndo = historyRef.current.length > 0
   const canRedo = futureRef.current.length > 0
 
-  const zoomIn = useCallback(() => {
-    setViewport((prev) => {
-      const newScale = clamp(prev.scale * 1.2, MIN_SCALE, MAX_SCALE)
-      return {
-        scale: newScale,
-        offsetX: 0,
-        offsetY: 0,
-      }
-    })
-  }, [])
-
-  const zoomOut = useCallback(() => {
-    setViewport((prev) => {
-      const newScale = clamp(prev.scale / 1.2, MIN_SCALE, MAX_SCALE)
-      return {
-        scale: newScale,
-        offsetX: 0,
-        offsetY: 0,
-      }
-    })
-  }, [])
-
-  const resetZoom = useCallback(() => {
-    setViewport({ scale: 1, offsetX: 0, offsetY: 0 })
-  }, [])
+  const { zoomIn, zoomOut, resetZoom } = useViewportZoom(
+    setViewport,
+    MIN_SCALE,
+    MAX_SCALE,
+  )
 
   const toolbarPenColors = useMemo(
     () => ({
