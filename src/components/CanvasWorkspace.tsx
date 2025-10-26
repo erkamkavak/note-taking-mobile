@@ -548,6 +548,11 @@ const CanvasWorkspace = ({
     viewport,
   ])
 
+  const renderCanvasRef = useRef(renderCanvas)
+  useEffect(() => {
+    renderCanvasRef.current = renderCanvas
+  }, [renderCanvas])
+
   useEffect(() => {
     resizeCanvas()
     renderCanvas()
@@ -611,14 +616,14 @@ const CanvasWorkspace = ({
         img.crossOrigin = 'anonymous'
         img.onload = () => {
           backgroundImageRef.current = img
-          renderCanvas()
+          renderCanvasRef.current?.()
         }
         img.src = activeNote.dataUrl
       }
     } else {
       backgroundImageRef.current = null
     }
-  }, [activeNote, renderCanvas, resetHistory])
+  }, [activeNote, resetHistory])
 
   const handleUndo = useCallback(() => {
     setStrokes((current) => {
