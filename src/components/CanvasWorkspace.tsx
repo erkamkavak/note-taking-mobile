@@ -7,11 +7,13 @@ import {
 } from 'react'
 import type { Note, Stroke, StrokePoint, StrokeTool } from '../types/note'
 import { translateStroke, cloneStrokes } from '../utils/canvasDrawing'
-import { clamp, distanceBetween } from '../utils/canvasGeometry'
+import { clamp } from '../utils/canvasGeometry'
 import { PenTool, HighlighterTool, EraserTool, SelectorTool } from '../tools'
 import type { SelectionState } from '../tools'
 import Toolbar from './Toolbar'
 import { useCanvasRenderer } from '../hooks/useCanvasRenderer'
+import { usePointerHandlers } from '../hooks/usePointerHandlers'
+import { useCanvasExport } from '../hooks/useCanvasExport'
 
 type ToolType = StrokeTool | 'selector'
 
@@ -52,11 +54,6 @@ const MAX_SCALE = 3.5
 const ERASER_FADE_DURATION = 180
 const DEBUG_PANEL_ENABLED = false
 
-const midpointBetween = (a: StrokePoint, b: StrokePoint): StrokePoint => ({
-  x: (a.x + b.x) / 2,
-  y: (a.y + b.y) / 2,
-})
-
 const CanvasWorkspace = ({
   activeNote,
   onSave,
@@ -67,12 +64,6 @@ const CanvasWorkspace = ({
   const futureRef = useRef<Stroke[][]>([])
   const strokesRef = useRef<Stroke[]>([])
   const loadedNoteIdRef = useRef<string | null>(null)
-  const pointerCacheRef = useRef<Map<number, StrokePoint>>(new Map())
-  const pinchStateRef = useRef<{
-    initialDistance: number
-    initialScale: number
-    focus: StrokePoint
-  } | null>(null)
   const removedStrokeIdsRef = useRef<Set<string>>(new Set())
   const fadeTimeoutsRef = useRef<Record<string, number>>({})
   const eraserIndicatorTimeoutRef = useRef<number | null>(null)
@@ -205,6 +196,41 @@ const CanvasWorkspace = ({
     fadingStrokes,
   })
 
+  const toCanvasPoint = useCallback(
+    (clientX: number, clientY: number): StrokePoint | null => {
+      const canvas = canvasRef.current
+      if (!canvas) return null
+      const rect = canvas.getBoundingClientRect()
+      const x = (clientX - rect.left - viewport.offsetX) / viewport.scale
+      const y = (clientY - rect.top - viewport.offsetY) / viewport.scale
+      return { x, y }
+    },
+    [canvasRef, viewport.offsetX, viewport.offsetY, viewport.scale],
+  )
+
+  usePointerHandlers({
+    canvasRef,
+    toCanvasPoint,
+    tool,
+    viewport,
+    setViewport,
+    hasPenInput,
+    isMobile,
+    strokes,
+    selectorToolRef,
+    eraserToolRef,
+    penToolRef,
+    highlighterToolRef,
+    setSelection,
+    setSelectionPath,
+    setEraserIndicator,
+    eraserIndicatorTimeoutRef,
+    eraserActiveRef,
+    removedStrokeIdsRef,
+    MIN_SCALE,
+    MAX_SCALE,
+  })
+
   useEffect(() => {
     strokesRef.current = strokes
   }, [strokes])
@@ -247,6 +273,23 @@ const CanvasWorkspace = ({
       day: 'numeric',
     })}`
   }, [activeNote])
+
+  const {
+    exportCanvas,
+    exportAsPNG,
+    exportAsPDF,
+    copySelectionAsImage,
+    shareSelectionAsImage,
+  } = useCanvasExport({
+    canvasRef,
+    canvasSizeRef,
+    backgroundImageRef,
+    drawStroke,
+    strokes,
+    currentStroke,
+    currentNoteTitle,
+    selection,
+  })
 
   const resetHistory = useCallback((initial: Stroke[]) => {
     historyRef.current = []
@@ -316,6 +359,85 @@ const CanvasWorkspace = ({
       setCurrentStroke(null)
     },
     [pushHistorySnapshot],
+  )
+
+  const exportCanvasRef = useRef(exportCanvas)
+  useEffect(() => {
+    exportCanvasRef.current = exportCanvas
+  }, [exportCanvas])
+
+  useEffect(() => {
+    if (strokes.length === 0 && !activeNote) return
+    if (!onUpdate) return
+
+    const timeoutId = setTimeout(() => {
+      const exportResult = exportCanvasRef.current()
+      if (!exportResult) return
+
+      onUpdate({
+        dataUrl: exportResult.dataUrl,
+        thumbnailUrl: exportResult.thumbnailUrl,
+        strokes: cloneStrokes(strokesRef.current),
+      })
+    }, isMobile ? 5000 : 2000)
+
+    return () => clearTimeout(timeoutId)
+  }, [strokes.length, activeNote?.id, onUpdate, isMobile])
+
+  const saveOnUnmountRef = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    saveOnUnmountRef.current = () => {
+      const exportResult = exportCanvasRef.current()
+      if (!exportResult) return
+      onSave({
+        dataUrl: exportResult.dataUrl,
+        thumbnailUrl: exportResult.thumbnailUrl,
+        strokes: cloneStrokes(strokesRef.current),
+      })
+    }
+  }, [onSave])
+
+  useEffect(() => {
+    return () => {
+      saveOnUnmountRef.current()
+    }
+  }, [])
+
+  const handleToolChange = useCallback((nextTool: ToolType) => {
+    setTool(nextTool)
+    if (nextTool !== 'selector') {
+      setSelection(null)
+      setSelectionPath([])
+    }
+    if (nextTool !== 'eraser') {
+      eraserActiveRef.current = false
+      if (eraserIndicatorTimeoutRef.current) {
+        window.clearTimeout(eraserIndicatorTimeoutRef.current)
+        eraserIndicatorTimeoutRef.current = null
+      }
+      setEraserIndicator(null)
+    }
+  }, [])
+
+  const handleSelectionColorChange = useCallback(
+    (color: string) => {
+      if (!selection || selection.strokeIds.length === 0) return
+      pushHistorySnapshot()
+      futureRef.current = []
+      const ids = selection.strokeIds
+      setStrokes((prev) =>
+        prev.map((stroke) =>
+          ids.includes(stroke.id)
+            ? {
+                ...stroke,
+                color,
+              }
+            : stroke,
+        ),
+      )
+    },
+    [pushHistorySnapshot, selection],
   )
 
   // Initialize tool instances
@@ -446,612 +568,6 @@ const CanvasWorkspace = ({
 
   const canUndo = historyRef.current.length > 0
   const canRedo = futureRef.current.length > 0
-
-  const toCanvasPoint = useCallback(
-    (clientX: number, clientY: number): StrokePoint | null => {
-      const canvas = canvasRef.current
-      if (!canvas) return null
-      const rect = canvas.getBoundingClientRect()
-      // Account for the container scale in coordinate conversion
-      const x = (clientX - rect.left - viewport.offsetX) / viewport.scale
-      const y = (clientY - rect.top - viewport.offsetY) / viewport.scale
-      return { x, y }
-    },
-    [viewport.offsetX, viewport.offsetY, viewport.scale],
-  )
-
-  const releasePointer = useCallback((pointerId: number) => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    if (canvas.hasPointerCapture(pointerId)) {
-      canvas.releasePointerCapture(pointerId)
-    }
-  }, [])
-
-  const handlePointerDown = useCallback(
-    (event: PointerEvent) => {
-      event.preventDefault()
-      if (!canvasRef.current) return
-
-      const penPriorityActive = hasPenInput && isMobile
-      const isTouchEvent = event.pointerType === 'touch'
-      const isPenEvent = event.pointerType === 'pen'
-
-      // Still block mouse/other pointers when pen mode is active
-      if (penPriorityActive && !isTouchEvent && !isPenEvent) {
-        return
-      }
-      
-      canvasRef.current.setPointerCapture(event.pointerId)
-
-      pointerCacheRef.current.set(event.pointerId, {
-        x: event.clientX,
-        y: event.clientY,
-      })
-
-      if (pointerCacheRef.current.size >= 2 && isTouchEvent) {
-        const points = Array.from(pointerCacheRef.current.values())
-        const distance = distanceBetween(
-          { x: points[0]?.x ?? 0, y: points[0]?.y ?? 0 },
-          { x: points[1]?.x ?? 0, y: points[1]?.y ?? 0 },
-        )
-        const midpoint = midpointBetween(
-          { x: points[0]?.x ?? 0, y: points[0]?.y ?? 0 },
-          { x: points[1]?.x ?? 0, y: points[1]?.y ?? 0 },
-        )
-        const focusPoint = toCanvasPoint(midpoint.x, midpoint.y)
-        if (focusPoint) {
-          pinchStateRef.current = {
-            initialDistance: distance,
-            initialScale: viewport.scale,
-            focus: focusPoint,
-          }
-        }
-        return
-      }
-
-      // When pen input is available we only want touches for pinch gestures
-      if (penPriorityActive && isTouchEvent) {
-        return
-      }
-
-      const point = toCanvasPoint(event.clientX, event.clientY)
-      if (!point) return
-
-      if (tool === 'selector') {
-        selectorToolRef.current?.handlePointerDown(point)
-        return
-      }
-
-      if (tool === 'eraser') {
-        setSelection(null)
-        setSelectionPath([])
-        removedStrokeIdsRef.current.clear()
-        eraserActiveRef.current = true
-        if (eraserIndicatorTimeoutRef.current) {
-          window.clearTimeout(eraserIndicatorTimeoutRef.current)
-          eraserIndicatorTimeoutRef.current = null
-        }
-        setEraserIndicator({
-          point,
-          isActive: true,
-          pulseKey: Date.now(),
-        })
-        eraserToolRef.current?.handlePointerDown(point, strokes, viewport.scale)
-        return
-      }
-
-      if (tool === 'pen') {
-        penToolRef.current?.handlePointerDown(point)
-        return
-      }
-
-      if (tool === 'highlighter') {
-        highlighterToolRef.current?.handlePointerDown(point)
-        return
-      }
-    },
-    [
-      strokes,
-      toCanvasPoint,
-      tool,
-      viewport.scale,
-      hasPenInput,
-      isMobile,
-    ],
-  )
-
-  const handlePointerMove = useCallback(
-    (event: PointerEvent) => {
-      if (!canvasRef.current) return
-
-      const penPriorityActive = hasPenInput && isMobile
-      const isTouchEvent = event.pointerType === 'touch'
-      const isPenEvent = event.pointerType === 'pen'
-
-      if (penPriorityActive && !isTouchEvent && !isPenEvent) {
-        return
-      }
-
-      if (pointerCacheRef.current.has(event.pointerId)) {
-        pointerCacheRef.current.set(event.pointerId, {
-          x: event.clientX,
-          y: event.clientY,
-        })
-      }
-
-      if (pointerCacheRef.current.size >= 2 && isTouchEvent) {
-        const points = Array.from(pointerCacheRef.current.values())
-        if (points.length < 2) return
-
-        const distance = distanceBetween(
-          { x: points[0]?.x ?? 0, y: points[0]?.y ?? 0 },
-          { x: points[1]?.x ?? 0, y: points[1]?.y ?? 0 },
-        )
-        const midpoint = midpointBetween(
-          { x: points[0]?.x ?? 0, y: points[0]?.y ?? 0 },
-          { x: points[1]?.x ?? 0, y: points[1]?.y ?? 0 },
-        )
-        const focusPoint = toCanvasPoint(midpoint.x, midpoint.y)
-
-        const pinchState = pinchStateRef.current
-        if (!pinchState || !focusPoint) return
-
-        const scaleDelta =
-          distance / (pinchState.initialDistance || Number.EPSILON)
-        const nextScale = clamp(
-          pinchState.initialScale * scaleDelta,
-          MIN_SCALE,
-          MAX_SCALE,
-        )
-
-        setViewport({
-          scale: nextScale,
-          offsetX: 0,
-          offsetY: 0,
-        })
-        return
-      }
-
-      if (penPriorityActive && isTouchEvent) {
-        return
-      }
-
-      const point = toCanvasPoint(event.clientX, event.clientY)
-      if (!point) return
-
-      if (tool === 'selector') {
-        selectorToolRef.current?.handlePointerMove(point)
-        return
-      }
-
-      if (tool === 'eraser') {
-        eraserToolRef.current?.handlePointerMove(point, strokes, viewport.scale)
-        if (eraserActiveRef.current) {
-          setEraserIndicator((prev) =>
-            prev
-              ? { ...prev, point }
-              : {
-                  point,
-                  isActive: true,
-                  pulseKey: Date.now(),
-                },
-          )
-        }
-        return
-      }
-
-      if (tool === 'pen') {
-        penToolRef.current?.handlePointerMove(point)
-        return
-      }
-
-      if (tool === 'highlighter') {
-        highlighterToolRef.current?.handlePointerMove(point)
-        return
-      }
-    },
-    [
-      strokes,
-      toCanvasPoint,
-      tool,
-      viewport.scale,
-      hasPenInput,
-      isMobile,
-    ],
-  )
-
-  const handlePointerUp = useCallback(
-    (event: PointerEvent) => {
-      const penPriorityActive = hasPenInput && isMobile
-      const isTouchEvent = event.pointerType === 'touch'
-      const isPenEvent = event.pointerType === 'pen'
-
-      if (penPriorityActive && !isTouchEvent && !isPenEvent) {
-        return
-      }
-
-      releasePointer(event.pointerId)
-      pointerCacheRef.current.delete(event.pointerId)
-
-      if (pointerCacheRef.current.size < 2) {
-        pinchStateRef.current = null
-      }
-
-      if (penPriorityActive && isTouchEvent) {
-        return
-      }
-
-      if (tool === 'selector') {
-        selectorToolRef.current?.handlePointerUp(strokes)
-        return
-      }
-
-      if (tool === 'eraser') {
-        eraserToolRef.current?.handlePointerUp()
-        eraserActiveRef.current = false
-        setEraserIndicator((prev) =>
-          prev
-            ? {
-                ...prev,
-                isActive: false,
-              }
-            : null,
-        )
-        if (eraserIndicatorTimeoutRef.current) {
-          window.clearTimeout(eraserIndicatorTimeoutRef.current)
-        }
-        eraserIndicatorTimeoutRef.current = window.setTimeout(() => {
-          setEraserIndicator(null)
-          eraserIndicatorTimeoutRef.current = null
-        }, 180)
-        removedStrokeIdsRef.current.clear()
-        return
-      }
-
-      if (tool === 'pen') {
-        penToolRef.current?.handlePointerUp()
-        return
-      }
-
-      if (tool === 'highlighter') {
-        highlighterToolRef.current?.handlePointerUp()
-        return
-      }
-    },
-    [
-      strokes,
-      releasePointer,
-      tool,
-      hasPenInput,
-      isMobile,
-    ],
-  )
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    canvas.addEventListener('pointerdown', handlePointerDown)
-    canvas.addEventListener('pointermove', handlePointerMove)
-    canvas.addEventListener('pointerup', handlePointerUp)
-    canvas.addEventListener('pointercancel', handlePointerUp)
-    canvas.addEventListener('pointerleave', handlePointerUp)
-
-    canvas.style.touchAction = 'none'
-
-    return () => {
-      canvas.removeEventListener('pointerdown', handlePointerDown)
-      canvas.removeEventListener('pointermove', handlePointerMove)
-      canvas.removeEventListener('pointerup', handlePointerUp)
-      canvas.removeEventListener('pointercancel', handlePointerUp)
-      canvas.removeEventListener('pointerleave', handlePointerUp)
-    }
-  }, [handlePointerDown, handlePointerMove, handlePointerUp])
-
-  const createThumbnail = useCallback((canvas: HTMLCanvasElement) => {
-    const ratio = window.devicePixelRatio || 1
-    const originalWidth = canvas.width / ratio
-    const originalHeight = canvas.height / ratio
-    const maxDimension = 360
-    const scale =
-      originalWidth > originalHeight
-        ? maxDimension / originalWidth
-        : maxDimension / originalHeight
-    const targetScale = Math.min(1, scale)
-    const targetWidth = Math.max(1, Math.round(originalWidth * targetScale))
-    const targetHeight = Math.max(1, Math.round(originalHeight * targetScale))
-
-    const thumbnailCanvas = document.createElement('canvas')
-    thumbnailCanvas.width = targetWidth
-    thumbnailCanvas.height = targetHeight
-    const thumbnailContext = thumbnailCanvas.getContext('2d')
-    if (!thumbnailContext) return canvas.toDataURL('image/png')
-
-    thumbnailContext.fillStyle = '#FAFAFA'
-    thumbnailContext.fillRect(0, 0, targetWidth, targetHeight)
-    thumbnailContext.drawImage(canvas, 0, 0, targetWidth, targetHeight)
-    return thumbnailCanvas.toDataURL('image/png')
-  }, [])
-
-  const exportCanvas = useCallback(() => {
-    const sourceCanvas = canvasRef.current
-    if (!sourceCanvas) return null
-
-    const ratio = window.devicePixelRatio || 1
-    const { width, height } = canvasSizeRef.current
-
-    const exportCanvasEl = document.createElement('canvas')
-    exportCanvasEl.width = width * ratio
-    exportCanvasEl.height = height * ratio
-    const exportContext = exportCanvasEl.getContext('2d')
-    if (!exportContext) return null
-
-    exportContext.setTransform(ratio, 0, 0, ratio, 0, 0)
-    exportContext.fillStyle = '#FAFAFA'
-    exportContext.fillRect(0, 0, width, height)
-
-    const backgroundImage = backgroundImageRef.current
-    if (backgroundImage) {
-      exportContext.drawImage(backgroundImage, 0, 0, width, height)
-    }
-
-    cloneStrokes(strokes).forEach((stroke) => drawStroke(exportContext, stroke))
-    if (currentStroke) {
-      drawStroke(exportContext, currentStroke)
-    }
-
-    const dataUrl = exportCanvasEl.toDataURL('image/png')
-    const thumbnailUrl = createThumbnail(exportCanvasEl)
-
-    return { dataUrl, thumbnailUrl }
-  }, [createThumbnail, currentStroke, drawStroke, strokes])
-
-  // Auto-save on changes
-  // Optimized for mobile: uses ref to prevent frequent re-renders, longer delay to reduce load
-  useEffect(() => {
-    if (strokes.length === 0 && !activeNote) return
-    if (!onUpdate) return
-
-    const timeoutId = setTimeout(() => {
-      const exportResult = exportCanvasRef.current()
-      if (!exportResult) return
-
-      onUpdate({
-        dataUrl: exportResult.dataUrl,
-        thumbnailUrl: exportResult.thumbnailUrl,
-        strokes: cloneStrokes(strokesRef.current),
-      })
-    }, isMobile ? 5000 : 2000) // Longer delay on mobile to reduce load
-
-    return () => clearTimeout(timeoutId)
-  }, [strokes.length, activeNote?.id, onUpdate, isMobile])
-
-  const exportCanvasRef = useRef(exportCanvas)
-  useEffect(() => {
-    exportCanvasRef.current = exportCanvas
-  }, [exportCanvas])
-
-  const saveOnUnmountRef = useRef<() => void>(() => {})
-
-  useEffect(() => {
-    saveOnUnmountRef.current = () => {
-      const exportResult = exportCanvasRef.current()
-      if (!exportResult) return
-      onSave({
-        dataUrl: exportResult.dataUrl,
-        thumbnailUrl: exportResult.thumbnailUrl,
-        strokes: cloneStrokes(strokesRef.current),
-      })
-    }
-  }, [onSave])
-
-  useEffect(() => {
-    return () => {
-      saveOnUnmountRef.current()
-    }
-  }, [])
-
-  const handleToolChange = useCallback((nextTool: ToolType) => {
-    setTool(nextTool)
-    if (nextTool !== 'selector') {
-      setSelection(null)
-      setSelectionPath([])
-    }
-    if (nextTool !== 'eraser') {
-      eraserActiveRef.current = false
-      if (eraserIndicatorTimeoutRef.current) {
-        window.clearTimeout(eraserIndicatorTimeoutRef.current)
-        eraserIndicatorTimeoutRef.current = null
-      }
-      setEraserIndicator(null)
-    }
-  }, [])
-
-  const handleSelectionColorChange = useCallback(
-    (color: string) => {
-      if (!selection || selection.strokeIds.length === 0) return
-      pushHistorySnapshot()
-      futureRef.current = []
-      const ids = selection.strokeIds
-      setStrokes((prev) =>
-        prev.map((stroke) =>
-          ids.includes(stroke.id)
-            ? {
-                ...stroke,
-                color,
-              }
-            : stroke,
-        ),
-      )
-    },
-    [pushHistorySnapshot, selection],
-  )
-
-  const downloadBlob = useCallback((blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    link.click()
-    URL.revokeObjectURL(url)
-  }, [])
-
-  const exportAsPNG = useCallback(() => {
-    const exportResult = exportCanvas()
-    if (!exportResult) return
-    
-    const link = document.createElement('a')
-    link.href = exportResult.dataUrl
-    link.download = `${currentNoteTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.png`
-    link.click()
-  }, [exportCanvas, currentNoteTitle])
-
-  const exportAsPDF = useCallback(async () => {
-    const exportResult = exportCanvas()
-    if (!exportResult) return
-
-    try {
-      // Dynamically import jsPDF to avoid bundling issues
-      const { jsPDF } = await import('jspdf')
-      
-      // Create a new PDF with A4 dimensions
-      const pdf = new jsPDF({
-        orientation: 'landscape',
-        unit: 'px',
-        format: 'a4'
-      })
-
-      // Get the image data
-      const imgData = exportResult.dataUrl
-      
-      // Calculate dimensions to fit the page
-      const pdfWidth = pdf.internal.pageSize.getWidth()
-      const pdfHeight = pdf.internal.pageSize.getHeight()
-      const img = new Image()
-      
-      img.onload = () => {
-        const imgWidth = img.width
-        const imgHeight = img.height
-        const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight, 1)
-        const finalWidth = imgWidth * ratio
-        const finalHeight = imgHeight * ratio
-        const x = (pdfWidth - finalWidth) / 2
-        const y = (pdfHeight - finalHeight) / 2
-        
-        pdf.addImage(imgData, 'PNG', x, y, finalWidth, finalHeight)
-        pdf.save(`${currentNoteTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.pdf`)
-      }
-      
-      img.src = imgData
-    } catch (error) {
-      console.error('Failed to export PDF:', error)
-      // Fallback to PNG if PDF generation fails
-      exportAsPNG()
-    }
-  }, [exportCanvas, currentNoteTitle, exportAsPNG])
-
-  const createSelectionCanvas = useCallback(
-    (strokeIds: string[]) => {
-      if (strokeIds.length === 0) return null
-      const selectedStrokes = strokes.filter((stroke) => strokeIds.includes(stroke.id))
-      if (selectedStrokes.length === 0) return null
-
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
-
-      selectedStrokes.forEach((stroke) => {
-        stroke.points.forEach((point) => {
-          minX = Math.min(minX, point.x)
-          minY = Math.min(minY, point.y)
-          maxX = Math.max(maxX, point.x)
-          maxY = Math.max(maxY, point.y)
-        })
-      })
-
-      if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
-        return null
-      }
-
-      const padding = 12
-      const width = Math.max(1, maxX - minX + padding * 2)
-      const height = Math.max(1, maxY - minY + padding * 2)
-      const ratio = window.devicePixelRatio || 1
-      const exportCanvas = document.createElement('canvas')
-      exportCanvas.width = width * ratio
-      exportCanvas.height = height * ratio
-      const ctx = exportCanvas.getContext('2d')
-      if (!ctx) return null
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
-      ctx.clearRect(0, 0, width, height)
-      ctx.translate(-minX + padding, -minY + padding)
-      selectedStrokes.forEach((stroke) => {
-        drawStroke(ctx, stroke)
-      })
-      return exportCanvas
-    },
-    [drawStroke, strokes],
-  )
-
-  const selectionToBlob = useCallback(
-    async (strokeIds: string[]) => {
-      const canvas = createSelectionCanvas(strokeIds)
-      if (!canvas) return null
-      return new Promise<Blob | null>((resolve) => {
-        canvas.toBlob((blob) => resolve(blob), 'image/png')
-      })
-    },
-    [createSelectionCanvas],
-  )
-
-  const copySelectionAsImage = useCallback(async () => {
-    if (!selection) return
-    const blob = await selectionToBlob(selection.strokeIds)
-    if (!blob) return
-    const clipboard = navigator.clipboard
-    const ClipboardItemCtor =
-      typeof window !== 'undefined'
-        ? (window as Window &
-            typeof globalThis & { ClipboardItem?: typeof ClipboardItem }).ClipboardItem
-        : undefined
-    if (clipboard && ClipboardItemCtor && 'write' in clipboard) {
-      try {
-        const item = new ClipboardItemCtor({ [blob.type]: blob })
-        await clipboard.write([item])
-        return
-      } catch (_) {
-        // fall back to download
-      }
-    }
-    downloadBlob(blob, 'selection.png')
-  }, [downloadBlob, selection, selectionToBlob])
-
-  const shareSelectionAsImage = useCallback(async () => {
-    if (!selection) return
-    const blob = await selectionToBlob(selection.strokeIds)
-    if (!blob) return
-    if (navigator.share) {
-      try {
-        const file = new File([blob], 'selection.png', { type: 'image/png' })
-        const canShareFiles = typeof navigator.canShare === 'function'
-          ? navigator.canShare({ files: [file] })
-          : true
-        if (canShareFiles) {
-          await navigator.share({
-            files: [file],
-            title: 'Canvas Selection',
-            text: 'Shared from Note Canvas',
-          })
-          return
-        }
-      } catch (_) {
-        // fall through to download
-      }
-    }
-    downloadBlob(blob, 'selection.png')
-  }, [downloadBlob, selection, selectionToBlob])
 
   const zoomIn = useCallback(() => {
     setViewport((prev) => {
