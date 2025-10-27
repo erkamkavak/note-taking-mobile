@@ -3,35 +3,29 @@ import type { Stroke, StrokePoint } from '../types/note'
 import type { SelectionState } from '../tools'
 import { translateStroke } from '../utils/canvasDrawing'
 
-type Viewport = {
-  scale: number
-  offsetX: number
-  offsetY: number
-}
-
 type EraserPreviewState = {
   point: StrokePoint
   strokeIds: string[]
 } | null
 
 type UseCanvasRendererProps = {
-  viewport: Viewport
   strokes: Stroke[]
   currentStroke: Stroke | null
   selection: SelectionState | null
   selectionPath: StrokePoint[]
   eraserPreview: EraserPreviewState
   fadingStrokes: Record<string, boolean>
+  backgroundColor?: string
 }
 
 export const useCanvasRenderer = ({
-  viewport,
   strokes,
   currentStroke,
   selection,
   selectionPath,
   eraserPreview,
   fadingStrokes,
+  backgroundColor = '#FAFAFA',
 }: UseCanvasRendererProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -48,8 +42,12 @@ export const useCanvasRenderer = ({
     const height = container.clientHeight
     const ratio = window.devicePixelRatio || 1
 
-    canvas.width = width * ratio
-    canvas.height = height * ratio
+    // Increase canvas resolution for better quality when zoomed
+    // Use a higher resolution multiplier for better rendering quality
+    const qualityMultiplier = Math.max(1, Math.min(ratio * 2, 4))
+    
+    canvas.width = width * qualityMultiplier
+    canvas.height = height * qualityMultiplier
     canvas.style.width = `${width}px`
     canvas.style.height = `${height}px`
 
@@ -113,13 +111,15 @@ export const useCanvasRenderer = ({
     if (!canvas || !context) return
 
     const ratio = window.devicePixelRatio || 1
+    const qualityMultiplier = Math.max(1, Math.min(ratio * 2, 4))
     const { width, height } = canvasSizeRef.current
 
     context.save()
-    context.setTransform(ratio, 0, 0, ratio, 0, 0)
+    context.setTransform(qualityMultiplier, 0, 0, qualityMultiplier, 0, 0)
     context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
     context.clearRect(0, 0, width, height)
-    context.fillStyle = '#FAFAFA'
+    context.fillStyle = backgroundColor
     context.fillRect(0, 0, width, height)
 
     const backgroundImage = backgroundImageRef.current
@@ -128,8 +128,6 @@ export const useCanvasRenderer = ({
       context.globalCompositeOperation = 'source-over'
       context.drawImage(backgroundImage, 0, 0, width, height)
     }
-
-    context.translate(viewport.offsetX, viewport.offsetY)
 
     const selectedIds = selection?.strokeIds ?? []
     const dragDelta = selection?.dragDelta
@@ -208,8 +206,7 @@ export const useCanvasRenderer = ({
     selection,
     selectionPath,
     strokes,
-    viewport.offsetX,
-    viewport.offsetY,
+    backgroundColor,
   ])
 
   const renderCanvasRef = useRef(renderCanvas)
@@ -242,7 +239,6 @@ export const useCanvasRenderer = ({
     currentStroke,
     selection,
     selectionPath,
-    viewport,
     eraserPreview,
     fadingStrokes,
   ])
