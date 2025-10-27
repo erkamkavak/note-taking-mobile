@@ -5,11 +5,13 @@ import {
   useRef,
   useState,
 } from 'react'
+import type { CSSProperties } from 'react'
 import type { Note, Stroke, StrokePoint, StrokeTool } from '../types/note'
 import { translateStroke, cloneStrokes } from '../utils/canvasDrawing'
 import { PenTool, HighlighterTool, EraserTool, SelectorTool } from '../tools'
 import type { SelectionState } from '../tools'
 import Toolbar from './Toolbar'
+import Settings from './Settings'
 import DebugPanel from './DebugPanel'
 import { useCanvasRenderer } from '../hooks/useCanvasRenderer'
 import { usePointerHandlers } from '../hooks/usePointerHandlers'
@@ -18,6 +20,7 @@ import { useViewportZoom } from '../hooks/useViewportZoom'
 import { loadSettings, persistSettings, type Settings as SettingsType } from '../utils/settingsStorage'
 
 type ToolType = StrokeTool | 'selector'
+type PageSize = 'vertical' | 'horizontal' | 'square'
 
 type CanvasWorkspaceProps = {
   activeNote: Note | null
@@ -40,14 +43,39 @@ type Viewport = {
   offsetY: number
 }
 
-const PEN_COLORS = ['#1C1C1E', '#007AFF', '#34C759', '#FF8C00', '#FF2D55']
+const PEN_COLORS = ['#1C1C1E', '#007AFF', '#34C759', '#FF8C00', '#FF2D55', '#FFFFFF']
 const HIGHLIGHTER_COLORS = ['#FFF6A1', '#CDE6FF', '#FFE5B9', '#FDD7FF']
+const BACKGROUND_COLORS = ['#FAFAFA', '#1C1C1E', '#FFF6A1', '#CDE6FF', '#FFE5B9', '#FDD7FF', '#D4F4DD']
 const SELECTION_COLORS = Array.from(new Set([...PEN_COLORS, ...HIGHLIGHTER_COLORS]))
+
+const getContrastPenColor = (backgroundColor: string): string => {
+  // Simple contrast calculation - return white for dark backgrounds, black for light
+  const color = backgroundColor.toLowerCase()
+  if (color === '#1c1c1e' || color.startsWith('#0') || color.startsWith('#1') || color.startsWith('#2')) {
+    return '#FFFFFF'
+  }
+  return '#1C1C1E'
+}
 
 const MIN_SCALE = 0.6
 const MAX_SCALE = 3.5
 const ERASER_FADE_DURATION = 180
 const DEBUG_PANEL_ENABLED = false
+const CANVAS_EDGE_PADDING = 160
+const MIN_EDGE_PADDING = 48
+
+const getCanvasDimensions = (pageSize: PageSize) => {
+  switch (pageSize) {
+    case 'vertical':
+      return { width: 'min(860px, 100%)', height: 'calc(100vh - 96px)' }
+    case 'horizontal':
+      return { width: 'min(1200px, 100%)', height: 'calc(100vh - 200px)' }
+    case 'square':
+      return { width: 'min(860px, 100%)', height: 'min(860px, calc(100vh - 96px))' }
+    default:
+      return { width: 'min(860px, 100%)', height: 'calc(100vh - 96px)' }
+  }
+}
 
 const CanvasWorkspace = ({
   activeNote,
@@ -155,7 +183,21 @@ const CanvasWorkspace = ({
     initialSettings.highlighter.opacity,
   )
   const [eraserSize, setEraserSize] = useState(initialSettings.eraser.size)
+  const [backgroundColor, setBackgroundColor] = useState('#FAFAFA')
+  const [pageSize, setPageSize] = useState<PageSize>('vertical')
+  const [showSettings, setShowSettings] = useState(false)
   const [strokes, setStrokes] = useState<Stroke[]>([])
+
+  // Auto-adjust pen color based on background (only if user hasn't manually changed it)
+  useEffect(() => {
+    const contrastColor = getContrastPenColor(backgroundColor)
+    // Only auto-change if current pen color is the default for the previous background
+    const isDefaultColor = penColor === '#1C1C1E' || penColor === '#FFFFFF'
+    if (isDefaultColor && penColor !== contrastColor && PEN_COLORS.includes(contrastColor)) {
+      setPenColor(contrastColor)
+    }
+  }, [backgroundColor])
+
   const [currentStroke, setCurrentStroke] = useState<Stroke | null>(null)
   const [viewport, setViewport] = useState<Viewport>({
     scale: 1,
@@ -183,25 +225,43 @@ const CanvasWorkspace = ({
     drawStroke,
     forceRender,
   } = useCanvasRenderer({
-    viewport,
     strokes,
     currentStroke,
     selection,
     selectionPath,
     eraserPreview,
     fadingStrokes,
+    backgroundColor,
   })
+
+  const stagePadding = useMemo(() => {
+    if (viewport.scale <= 1) return 0
+    if (typeof window === 'undefined') return MIN_EDGE_PADDING
+    const viewportMinDimension = Math.min(window.innerWidth, window.innerHeight)
+    const dynamicPadding = Math.min(
+      CANVAS_EDGE_PADDING,
+      Math.max(MIN_EDGE_PADDING, Math.round(viewportMinDimension * 0.12)),
+    )
+    return dynamicPadding
+  }, [viewport.scale])
+
+  const canvasDimensions = useMemo(() => getCanvasDimensions(pageSize), [pageSize])
+
+  // Force canvas re-render when background changes
+  useEffect(() => {
+    forceRender()
+  }, [backgroundColor, forceRender])
 
   const toCanvasPoint = useCallback(
     (clientX: number, clientY: number): StrokePoint | null => {
       const canvas = canvasRef.current
       if (!canvas) return null
       const rect = canvas.getBoundingClientRect()
-      const x = (clientX - rect.left - viewport.offsetX) / viewport.scale
-      const y = (clientY - rect.top - viewport.offsetY) / viewport.scale
+      const x = (clientX - rect.left) / viewport.scale
+      const y = (clientY - rect.top) / viewport.scale
       return { x, y }
     },
-    [canvasRef, viewport.offsetX, viewport.offsetY, viewport.scale],
+    [canvasRef, viewport.scale],
   )
 
   usePointerHandlers({
@@ -410,20 +470,12 @@ const CanvasWorkspace = ({
     persistSettings(settings)
   }, [tool, penColor, penSize, highlighterColor, highlighterSize, highlighterOpacity, eraserSize])
 
-  const handleToolChange = useCallback((nextTool: ToolType) => {
-    setTool(nextTool)
-    if (nextTool !== 'selector') {
-      setSelection(null)
-      setSelectionPath([])
-    }
-    if (nextTool !== 'eraser') {
-      eraserActiveRef.current = false
-      if (eraserIndicatorTimeoutRef.current) {
-        window.clearTimeout(eraserIndicatorTimeoutRef.current)
-        eraserIndicatorTimeoutRef.current = null
-      }
-      setEraserIndicator(null)
-    }
+  const handleToolChange = useCallback((newTool: ToolType) => {
+    setTool(newTool)
+  }, [])
+
+  const handleSettingsClick = useCallback(() => {
+    setShowSettings(true)
   }, [])
 
   const handleSelectionColorChange = useCallback(
@@ -592,20 +644,20 @@ const CanvasWorkspace = ({
   const eraserIndicatorPosition = useMemo(() => {
     if (!eraserIndicator) return null
     return {
-      x: eraserIndicator.point.x + viewport.offsetX,
-      y: eraserIndicator.point.y + viewport.offsetY,
+      x: eraserIndicator.point.x,
+      y: eraserIndicator.point.y,
     }
-  }, [eraserIndicator, viewport.offsetX, viewport.offsetY])
+  }, [eraserIndicator])
 
   const selectionActionPosition = useMemo(() => {
     if (!selection) return null
     const { minX, maxX, minY } = selection.boundingBox
     const centerX = (minX + maxX) / 2
     return {
-      x: centerX + viewport.offsetX,
-      y: minY + viewport.offsetY,
+      x: centerX,
+      y: minY,
     }
-  }, [selection, viewport])
+  }, [selection])
 
   const selectionActiveColor = useMemo(() => {
     if (!selection) return null
@@ -636,7 +688,10 @@ const CanvasWorkspace = ({
           onHighlighterOpacityChange={setHighlighterOpacity}
           eraserSize={eraserSize}
           onEraserSizeChange={setEraserSize}
-          availableColors={toolbarPenColors}
+          availableColors={{
+            pen: PEN_COLORS,
+            highlighter: HIGHLIGHTER_COLORS,
+          }}
           canUndo={canUndo}
           canRedo={canRedo}
           onUndo={handleUndo}
@@ -646,74 +701,84 @@ const CanvasWorkspace = ({
           onZoomOut={zoomOut}
           onZoomReset={resetZoom}
           onBack={onBackToGallery}
-          onExportPNG={exportAsPNG}
-          onExportPDF={exportAsPDF}
+          onSettingsClick={handleSettingsClick}
           hasPenInput={hasPenInput && isMobile}
         />
       </div>
-      <div 
-        className="canvas-container" 
-        ref={containerRef}
-        style={{
-          transform: `scale(${viewport.scale})`,
-          transformOrigin: 'center',
-          transition: 'transform 0.2s ease-out',
-          touchAction: hasPenInput && isMobile ? 'none' : 'none' // Always prevent default on mobile
-        }}
+      <div
+        className="canvas-stage"
+        style={
+          {
+            '--stage-padding': `${stagePadding}px`,
+            touchAction: 'none',
+          } as CSSProperties
+        }
       >
-        <canvas 
-          ref={canvasRef} 
+        <div
+          className="canvas-container"
+          ref={containerRef}
           style={{
-            touchAction: hasPenInput && isMobile ? 'none' : 'none'
+            width: canvasDimensions.width,
+            height: canvasDimensions.height,
+            transform: `matrix(${viewport.scale}, 0, 0, ${viewport.scale}, ${viewport.offsetX}, ${viewport.offsetY})`,
+            transformOrigin: '0 0',
+            touchAction: 'none',
           }}
-        />
-        {selection &&
-          selection.strokeIds.length > 0 &&
-          selectionActionPosition && (
-            <div
-              className="selection-actions"
-              style={{
-                left: `${selectionActionPosition.x}px`,
-                top: `${selectionActionPosition.y}px`,
-              }}
-            >
-              <div className="selection-actions__label">Selection</div>
-              <div className="selection-actions__colors">
-                {SELECTION_COLORS.map((color) => (
-                  <button
-                    type="button"
-                    key={`selection-color-${color}`}
-                    className={`selection-color${
-                      selectionActiveColor === color ? ' active' : ''
-                    }`}
-                    style={{ backgroundColor: color }}
-                    onClick={() => handleSelectionColorChange(color)}
-                    aria-label={`Change selection color to ${color}`}
-                  />
-                ))}
-              </div>
-              <div className="selection-actions__buttons">
-                <button type="button" onClick={copySelectionAsImage}>
-                  Copy PNG
-                </button>
-                <button type="button" onClick={shareSelectionAsImage}>
-                  Share
-                </button>
-              </div>
-            </div>
-          )}
-        {eraserIndicator && eraserIndicatorPosition && (
-          <div
-            key={eraserIndicator.pulseKey}
-            className={`eraser-indicator${eraserIndicator.isActive ? ' is-active' : ''}`}
+        >
+          <canvas
+            ref={canvasRef}
             style={{
-              width: `${eraserSize * viewport.scale}px`,
-              height: `${eraserSize * viewport.scale}px`,
-              left: `${eraserIndicatorPosition.x - (eraserSize * viewport.scale) / 2}px`,
-              top: `${eraserIndicatorPosition.y - (eraserSize * viewport.scale) / 2}px`,
+              touchAction: 'none',
             }}
           />
-        )}
+          {selection &&
+            selection.strokeIds.length > 0 &&
+            selectionActionPosition && (
+              <div
+                className="selection-actions"
+                style={{
+                  left: `${selectionActionPosition.x}px`,
+                  top: `${selectionActionPosition.y}px`,
+                }}
+              >
+                <div className="selection-actions__label">Selection</div>
+                <div className="selection-actions__colors">
+                  {SELECTION_COLORS.map((color) => (
+                    <button
+                      type="button"
+                      key={`selection-color-${color}`}
+                      className={`selection-color${
+                        selectionActiveColor === color ? ' active' : ''
+                      }`}
+                      style={{ backgroundColor: color }}
+                      onClick={() => handleSelectionColorChange(color)}
+                      aria-label={`Change selection color to ${color}`}
+                    />
+                  ))}
+                </div>
+                <div className="selection-actions__buttons">
+                  <button type="button" onClick={copySelectionAsImage}>
+                    Copy PNG
+                  </button>
+                  <button type="button" onClick={shareSelectionAsImage}>
+                    Share
+                  </button>
+                </div>
+              </div>
+            )}
+          {eraserIndicator && eraserIndicatorPosition && (
+            <div
+              key={eraserIndicator.pulseKey}
+              className={`eraser-indicator${eraserIndicator.isActive ? ' is-active' : ''}`}
+              style={{
+                width: `${eraserSize * viewport.scale}px`,
+                height: `${eraserSize * viewport.scale}px`,
+                left: `${eraserIndicatorPosition.x - (eraserSize * viewport.scale) / 2}px`,
+                top: `${eraserIndicatorPosition.y - (eraserSize * viewport.scale) / 2}px`,
+              }}
+            />
+          )}
+        </div>
       </div>
 
       {DEBUG_PANEL_ENABLED && debugInfo && (
@@ -722,6 +787,18 @@ const CanvasWorkspace = ({
           hasPenInput={hasPenInput}
           isMobile={isMobile}
           recentPointerEvents={recentPointerEvents}
+        />
+      )}
+
+      {showSettings && (
+        <Settings
+          backgroundColor={backgroundColor}
+          onBackgroundColorChange={setBackgroundColor}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          onExportPNG={exportAsPNG}
+          onExportPDF={exportAsPDF}
+          onClose={() => setShowSettings(false)}
         />
       )}
     </div>
