@@ -1,13 +1,11 @@
 import { NOTE_STORAGE_KEY, type Note, type Stroke } from '../types/note'
 
-const reviveStrokes = (strokes: Stroke[] | undefined): Stroke[] | undefined => {
-  if (!strokes) return undefined
-  return strokes.map((stroke) => ({
+const reviveStrokes = (strokes: Stroke[] | undefined): Stroke[] =>
+  (strokes ?? []).map((stroke) => ({
     ...stroke,
     points: stroke.points ?? [],
     opacity: stroke.opacity ?? (stroke.tool === 'highlighter' ? 0.35 : 1),
   }))
-}
 
 export const loadNotes = (): Note[] => {
   if (typeof window === 'undefined') {
@@ -22,8 +20,32 @@ export const loadNotes = (): Note[] => {
       .map((note, index) => {
         const createdAt = note.createdAt ?? Date.now()
         const updatedAt = note.updatedAt ?? createdAt
+        const hasPages = Array.isArray((note as any).pages)
+        let pages = hasPages
+          ? (note as any).pages
+          : [
+              {
+                id: `${index + 1}`,
+                strokes: [],
+                backgroundColor: '#FAFAFA',
+                pageSize: 'vertical',
+                thumbnailUrl: undefined,
+              },
+            ]
+        pages = pages.map((p: any, i: number) => ({
+          id: p.id ?? `${i + 1}`,
+          strokes: reviveStrokes(p.strokes),
+          backgroundColor: p.backgroundColor ?? '#FAFAFA',
+          pageSize: p.pageSize ?? 'vertical',
+          thumbnailUrl: p.thumbnailUrl,
+        }))
+
+        const currentPageIndex = Number.isInteger((note as any).currentPageIndex)
+          ? (note as any).currentPageIndex
+          : 0
+
         const noteWithDefaults: Note = {
-          ...note,
+          id: note.id,
           dataUrl: note.dataUrl,
           thumbnailUrl: note.thumbnailUrl ?? note.dataUrl,
           title:
@@ -31,7 +53,8 @@ export const loadNotes = (): Note[] => {
             `Saved Note ${index + 1} – ${new Date(updatedAt).toLocaleDateString()}`,
           createdAt,
           updatedAt,
-          strokes: reviveStrokes(note.strokes),
+          pages,
+          currentPageIndex: Math.min(Math.max(0, currentPageIndex), Math.max(0, pages.length - 1)),
         }
         return noteWithDefaults
       })

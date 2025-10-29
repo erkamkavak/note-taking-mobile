@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import CanvasWorkspace from './components/CanvasWorkspace'
 import NoteGallery from './components/NoteGallery'
-import type { Note } from './types/note'
+import type { Note, Stroke } from './types/note'
 import { loadNotes, persistNotes } from './utils/noteStorage'
 
 type View = 'canvas' | 'gallery'
@@ -152,10 +152,14 @@ function App() {
     dataUrl,
     thumbnailUrl,
     strokes,
+    pages,
+    currentPageIndex,
   }: {
     dataUrl: string
     thumbnailUrl: string
-    strokes: Note['strokes']
+    strokes: Stroke[]
+    pages?: Note['pages']
+    currentPageIndex?: number
   }) => {
     if (activeNote) {
       setNotes((existing) =>
@@ -166,7 +170,11 @@ function App() {
                   ...note,
                   dataUrl,
                   thumbnailUrl,
-                  strokes,
+                  // if pages provided, write them
+                  ...(pages ? { pages } : {}),
+                  ...(typeof currentPageIndex === 'number'
+                    ? { currentPageIndex }
+                    : {}),
                   updatedAt: Date.now(),
                 }
               : note,
@@ -179,6 +187,18 @@ function App() {
       setNotes((existing) => {
         const createdAt = Date.now()
         const nextIndex = existing.length + 1
+        const pageId = ensureId()
+        const initialPages = (pages && pages.length > 0
+          ? pages
+          : [
+              {
+                id: pageId,
+                strokes: strokes ?? [],
+                backgroundColor: '#FAFAFA',
+                pageSize: 'vertical' as const,
+                thumbnailUrl: undefined,
+              },
+            ]) as Note['pages']
         const newNote: Note = {
           id: ensureId(),
           dataUrl,
@@ -186,7 +206,8 @@ function App() {
           createdAt,
           updatedAt: createdAt,
           title: generateNoteTitle(nextIndex),
-          strokes,
+          pages: initialPages,
+          currentPageIndex: typeof currentPageIndex === 'number' ? currentPageIndex : 0,
         }
         createdNoteId = newNote.id
         return [newNote, ...existing]
@@ -201,7 +222,7 @@ function App() {
   const handleSaveNote = (data: {
     dataUrl: string
     thumbnailUrl: string
-    strokes: Note['strokes']
+    strokes: Stroke[]
   }) => {
     handleUpdateNote(data)
     setView('gallery')

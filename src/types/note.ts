@@ -14,6 +14,16 @@ export type Stroke = {
   points: StrokePoint[]
 }
 
+export type PageSize = 'vertical' | 'horizontal' | 'square'
+
+export type Page = {
+  id: string
+  strokes: Stroke[]
+  backgroundColor: string
+  pageSize: PageSize
+  thumbnailUrl?: string
+}
+
 export type Note = {
   id: string
   dataUrl: string
@@ -21,7 +31,8 @@ export type Note = {
   title: string
   createdAt: number
   updatedAt: number
-  strokes?: Stroke[]
+  pages: Page[]
+  currentPageIndex: number
 }
 
 export const NOTE_STORAGE_KEY = 'note-taking-codex-notes'

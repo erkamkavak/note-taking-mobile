@@ -15,10 +15,135 @@
   padding: 24px;
 }
 
+.page-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  border-radius: 16px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.1);
+  padding: 14px;
+  pointer-events: auto;
+  width: 320px;
+}
+
+.page-controls-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.page-controls-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.page-controls-count {
+  font-size: 0.75rem;
+  color: #6b6b70;
+  background: rgba(142, 142, 147, 0.18);
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.page-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.page-list {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  overflow-x: auto;
+  padding: 2px 4px;
+}
+
+.page-pill {
+  border: none;
+  background: rgba(142, 142, 147, 0.14);
+  color: #1c1c1e;
+  font-weight: 600;
+  font-size: 0.8rem;
+  padding: 8px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.page-pill.active {
+  background: rgba(0, 122, 255, 0.18);
+  color: #007aff;
+  transform: translateY(-1px);
+}
+
+.icon-button {
+  border: none;
+  background: rgba(142, 142, 147, 0.14);
+  color: #1c1c1e;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.icon-button:disabled {
+  opacity: 0.4;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.page-actions-left,
+.page-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ghost-button.danger {
+  background: rgba(255, 59, 48, 0.12);
+  color: #ff3b30;
+}
+
+@media (max-width: 960px) {
+  .toolbar-subpanel {
+    position: static;
+    width: 100%;
+    padding: 0 16px;
+    margin-top: 8px;
+  }
+
+  .page-controls {
+    width: 100%;
+  }
+}
+
 .toolbar-wrapper {
   position: absolute;
   top: 24px;
   right: 24px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.toolbar-subpanel {
+  position: absolute;
+  top: 24px;
+  left: 24px;
   z-index: 5;
   pointer-events: none;
 }

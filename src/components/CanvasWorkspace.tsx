@@ -6,10 +6,11 @@ import {
   useState,
 } from 'react'
 import type { CSSProperties } from 'react'
-import type { Note, Stroke, StrokePoint, StrokeTool } from '../types/note'
+import type { Note, Stroke, StrokePoint, StrokeTool, PageSize } from '../types/note'
 import { translateStroke, cloneStrokes } from '../utils/canvasDrawing'
 import { PenTool, HighlighterTool, EraserTool, SelectorTool } from '../tools'
 import type { SelectionState } from '../tools'
+import PageControls from './PageControls'
 import Toolbar from './Toolbar'
 import Settings from './Settings'
 import DebugPanel from './DebugPanel'
@@ -17,22 +18,24 @@ import { useCanvasRenderer } from '../hooks/useCanvasRenderer'
 import { usePointerHandlers } from '../hooks/usePointerHandlers'
 import { useCanvasExport } from '../hooks/useCanvasExport'
 import { useViewportZoom } from '../hooks/useViewportZoom'
+import { usePageNavigation } from '../hooks/usePageNavigation'
 import { loadSettings, persistSettings, type Settings as SettingsType } from '../utils/settingsStorage'
 
 type ToolType = StrokeTool | 'selector'
-type PageSize = 'vertical' | 'horizontal' | 'square'
 
 type CanvasWorkspaceProps = {
   activeNote: Note | null
   onSave: (payload: {
     dataUrl: string
     thumbnailUrl: string
-    strokes: Note['strokes']
+    strokes: Stroke[]
   }) => void
   onUpdate?: (payload: {
     dataUrl: string
     thumbnailUrl: string
-    strokes: Note['strokes']
+    strokes: Stroke[]
+    pages?: Note['pages']
+    currentPageIndex?: number
   }) => void
   onBackToGallery: () => void
 }
@@ -45,7 +48,6 @@ type Viewport = {
 
 const PEN_COLORS = ['#1C1C1E', '#007AFF', '#34C759', '#FF8C00', '#FF2D55', '#FFFFFF']
 const HIGHLIGHTER_COLORS = ['#FFF6A1', '#CDE6FF', '#FFE5B9', '#FDD7FF']
-const BACKGROUND_COLORS = ['#FAFAFA', '#1C1C1E', '#FFF6A1', '#CDE6FF', '#FFE5B9', '#FDD7FF', '#D4F4DD']
 const SELECTION_COLORS = Array.from(new Set([...PEN_COLORS, ...HIGHLIGHTER_COLORS]))
 
 const getContrastPenColor = (backgroundColor: string): string => {
@@ -83,10 +85,17 @@ const CanvasWorkspace = ({
   onUpdate,
   onBackToGallery,
 }: CanvasWorkspaceProps) => {
-  const historyRef = useRef<Stroke[][]>([])
-  const futureRef = useRef<Stroke[][]>([])
+  // Per-page history buffers
+  const pageHistoryRef = useRef<Record<string, { history: Stroke[][]; future: Stroke[][] }>>({})
+  const getPageBuffers = useCallback((pageId: string) => {
+    if (!pageHistoryRef.current[pageId]) {
+      pageHistoryRef.current[pageId] = { history: [], future: [] }
+    }
+    return pageHistoryRef.current[pageId]
+  }, [])
   const strokesRef = useRef<Stroke[]>([])
   const loadedNoteIdRef = useRef<string | null>(null)
+  const loadedPageIdRef = useRef<string | null>(null)
   const removedStrokeIdsRef = useRef<Set<string>>(new Set())
   const fadeTimeoutsRef = useRef<Record<string, number>>({})
   const eraserIndicatorTimeoutRef = useRef<number | null>(null)
@@ -185,6 +194,7 @@ const CanvasWorkspace = ({
   const [eraserSize, setEraserSize] = useState(initialSettings.eraser.size)
   const [backgroundColor, setBackgroundColor] = useState('#FAFAFA')
   const [pageSize, setPageSize] = useState<PageSize>('vertical')
+  const [currentPageIndex, setCurrentPageIndex] = useState<number>(0)
   const [showSettings, setShowSettings] = useState(false)
   const [strokes, setStrokes] = useState<Stroke[]>([])
 
@@ -216,6 +226,7 @@ const CanvasWorkspace = ({
     isActive: boolean
     pulseKey: number
   } | null>(null)
+  const [historyVersion, setHistoryVersion] = useState(0)
 
   const {
     canvasRef,
@@ -333,7 +344,7 @@ const CanvasWorkspace = ({
   const {
     exportCanvas,
     exportAsPNG,
-    exportAsPDF,
+    exportPagesAsPDF,
     copySelectionAsImage,
     shareSelectionAsImage,
   } = useCanvasExport({
@@ -348,18 +359,27 @@ const CanvasWorkspace = ({
   })
 
   const resetHistory = useCallback((initial: Stroke[]) => {
-    historyRef.current = []
-    futureRef.current = []
+    // reset active page buffers
+    const pageId = activeNote?.pages?.[currentPageIndex]?.id
+    if (pageId) {
+      pageHistoryRef.current[pageId] = { history: [], future: [] }
+    }
     removedStrokeIdsRef.current.clear()
     setStrokes(cloneStrokes(initial))
     setCurrentStroke(null)
     setSelection(null)
     setSelectionPath([])
-  }, [])
+    setHistoryVersion((v) => v + 1)
+  }, [activeNote?.pages, currentPageIndex])
 
   const pushHistorySnapshot = useCallback(() => {
-    historyRef.current.push(cloneStrokes(strokesRef.current))
-  }, [])
+    const pageId = activeNote?.pages?.[currentPageIndex]?.id
+    if (!pageId) return
+    const buffers = getPageBuffers(pageId)
+    buffers.history.push(cloneStrokes(strokesRef.current))
+    buffers.future = []
+    setHistoryVersion((v) => v + 1)
+  }, [activeNote?.pages, currentPageIndex, getPageBuffers])
 
   const scheduleStrokeRemoval = useCallback((ids: string[]) => {
     if (ids.length === 0) return
@@ -395,7 +415,6 @@ const CanvasWorkspace = ({
       if (newIds.length === 0) return
       if (erasingSession.size === 0) {
         pushHistorySnapshot()
-        futureRef.current = []
       }
       newIds.forEach((id) => erasingSession.add(id))
       scheduleStrokeRemoval(newIds)
@@ -410,7 +429,6 @@ const CanvasWorkspace = ({
   const commitStroke = useCallback(
     (stroke: Stroke) => {
       pushHistorySnapshot()
-      futureRef.current = []
       setStrokes((prev) => [...prev, stroke])
       setCurrentStroke(null)
     },
@@ -482,7 +500,6 @@ const CanvasWorkspace = ({
     (color: string) => {
       if (!selection || selection.strokeIds.length === 0) return
       pushHistorySnapshot()
-      futureRef.current = []
       const ids = selection.strokeIds
       setStrokes((prev) =>
         prev.map((stroke) =>
@@ -533,7 +550,6 @@ const CanvasWorkspace = ({
         (path) => setSelectionPath(path),
         (strokeIds, delta) => {
           pushHistorySnapshot()
-          futureRef.current = []
           setStrokes((prev) =>
             prev.map((stroke) =>
               strokeIds.includes(stroke.id)
@@ -572,73 +588,82 @@ const CanvasWorkspace = ({
       return
     }
 
-    if (loadedNoteIdRef.current === activeNote.id) {
-      return
-    }
+    const nextNoteId = activeNote.id
+    const nextIndex = Number.isInteger(activeNote.currentPageIndex)
+      ? Math.min(Math.max(0, activeNote.currentPageIndex), Math.max(0, (activeNote.pages?.length ?? 1) - 1))
+      : 0
 
-    loadedNoteIdRef.current = activeNote.id
+    const nextPage = activeNote.pages?.[nextIndex]
+    const nextPageId = nextPage?.id ?? null
 
-    const noteStrokes = activeNote.strokes ? cloneStrokes(activeNote.strokes) : []
-    resetHistory(noteStrokes)
+    const noteChanged = loadedNoteIdRef.current !== nextNoteId
+    const pageChanged = loadedPageIdRef.current !== nextPageId
+
+    if (!noteChanged && !pageChanged) return
+
+    loadedNoteIdRef.current = nextNoteId
+    loadedPageIdRef.current = nextPageId
+    setCurrentPageIndex(nextIndex)
+
+    const initialStrokes = nextPage?.strokes ? cloneStrokes(nextPage.strokes) : []
+    resetHistory(initialStrokes)
+    setBackgroundColor(nextPage?.backgroundColor ?? '#FAFAFA')
+    setPageSize(nextPage?.pageSize ?? 'vertical')
     setViewport({ scale: 1, offsetX: 0, offsetY: 0 })
 
-    if (!activeNote.strokes || activeNote.strokes.length === 0) {
-      if (activeNote.dataUrl) {
-        const img = new Image()
-        img.crossOrigin = 'anonymous'
-        img.onload = () => {
-          backgroundImageRef.current = img
-          forceRender()
-        }
-        img.src = activeNote.dataUrl
-      }
-    } else {
-      backgroundImageRef.current = null
-    }
+    backgroundImageRef.current = null
+    forceRender()
   }, [activeNote, forceRender, resetHistory])
 
   const handleUndo = useCallback(() => {
+    const pageId = activeNote?.pages?.[currentPageIndex]?.id
+    if (!pageId) return
+    const buffers = getPageBuffers(pageId)
     setStrokes((current) => {
-      if (historyRef.current.length === 0) return current
-      const previous = historyRef.current.pop()
+      if (buffers.history.length === 0) return current
+      const previous = buffers.history.pop()
       if (!previous) return current
-      futureRef.current.push(cloneStrokes(current))
-      const cloned = cloneStrokes(previous)
-      return cloned
+      buffers.future.push(cloneStrokes(current))
+      return cloneStrokes(previous)
     })
     setSelection(null)
     setSelectionPath([])
     setCurrentStroke(null)
-  }, [])
+    setHistoryVersion((v) => v + 1)
+  }, [activeNote?.pages, currentPageIndex, getPageBuffers])
 
   const handleRedo = useCallback(() => {
+    const pageId = activeNote?.pages?.[currentPageIndex]?.id
+    if (!pageId) return
+    const buffers = getPageBuffers(pageId)
     setStrokes((current) => {
-      if (futureRef.current.length === 0) return current
-      const next = futureRef.current.pop()
+      if (buffers.future.length === 0) return current
+      const next = buffers.future.pop()
       if (!next) return current
-      historyRef.current.push(cloneStrokes(current))
+      buffers.history.push(cloneStrokes(current))
       return cloneStrokes(next)
     })
     setSelection(null)
     setSelectionPath([])
     setCurrentStroke(null)
-  }, [])
+    setHistoryVersion((v) => v + 1)
+  }, [activeNote?.pages, currentPageIndex, getPageBuffers])
 
-  const canUndo = historyRef.current.length > 0
-  const canRedo = futureRef.current.length > 0
+  const canUndo = useMemo(() => {
+    const pageId = activeNote?.pages?.[currentPageIndex]?.id
+    if (!pageId) return false
+    return (pageHistoryRef.current[pageId]?.history.length ?? 0) > 0
+  }, [activeNote?.pages, currentPageIndex, historyVersion])
+  const canRedo = useMemo(() => {
+    const pageId = activeNote?.pages?.[currentPageIndex]?.id
+    if (!pageId) return false
+    return (pageHistoryRef.current[pageId]?.future.length ?? 0) > 0
+  }, [activeNote?.pages, currentPageIndex, historyVersion])
 
   const { zoomIn, zoomOut, resetZoom } = useViewportZoom(
     setViewport,
     MIN_SCALE,
     MAX_SCALE,
-  )
-
-  const toolbarPenColors = useMemo(
-    () => ({
-      pen: PEN_COLORS,
-      highlighter: HIGHLIGHTER_COLORS,
-    }),
-    [],
   )
 
   const eraserIndicatorPosition = useMemo(() => {
@@ -658,6 +683,58 @@ const CanvasWorkspace = ({
       y: minY,
     }
   }, [selection])
+
+  // Persist updates to pages/currentPageIndex and note thumbnails periodically
+  useEffect(() => {
+    if (!onUpdate) return
+    if (!activeNote) return
+    const page = activeNote.pages?.[currentPageIndex]
+    if (!page) return
+    const timeoutId = setTimeout(() => {
+      const exportResult = exportCanvasRef.current?.()
+      const updatedPages: Note['pages'] = activeNote.pages.map((p, idx) =>
+        idx === currentPageIndex ? { ...p, strokes: cloneStrokes(strokesRef.current) } : p,
+      )
+      onUpdate({
+        dataUrl: exportResult?.dataUrl ?? activeNote.dataUrl,
+        thumbnailUrl: activeNote.thumbnailUrl,
+        strokes: cloneStrokes(strokesRef.current),
+        pages: updatedPages,
+        currentPageIndex,
+      })
+    }, isMobile ? 5000 : 2000)
+    return () => clearTimeout(timeoutId)
+  }, [activeNote, currentPageIndex, onUpdate, isMobile])
+
+  const { selectPage, addPage, duplicatePage, deletePage } = usePageNavigation({
+    activeNote,
+    strokesRef,
+    onUpdate,
+    setCurrentPageIndex,
+    resetHistory,
+    setBackgroundColor,
+    setPageSize,
+    setViewport,
+  })
+
+  const handleSelectPage = useCallback((i: number) => selectPage(i), [selectPage])
+  const handleAddPage = useCallback(() => addPage(), [addPage])
+
+  const handleDuplicatePage = useCallback(() => duplicatePage(), [duplicatePage])
+
+  const handleDeletePage = useCallback(() => deletePage(), [deletePage])
+
+  const exportAllPagesAsPDF = useCallback(async () => {
+    if (!activeNote || !activeNote.pages?.length) return
+    await exportPagesAsPDF(activeNote.pages, activeNote.title)
+  }, [activeNote, exportPagesAsPDF])
+
+  // PNG export is for the current page; all-pages PNG ZIP would require an extra dependency.
+
+  const exportCurrentPageAsPNG = useCallback(() => {
+    // current canvas represents the active page
+    exportAsPNG()
+  }, [exportAsPNG])
 
   const selectionActiveColor = useMemo(() => {
     if (!selection) return null
@@ -704,6 +781,19 @@ const CanvasWorkspace = ({
           onSettingsClick={handleSettingsClick}
           hasPenInput={hasPenInput && isMobile}
         />
+      </div>
+      <div className="toolbar-subpanel">
+        {activeNote && (
+          <PageControls
+            pages={activeNote.pages}
+            currentPageIndex={currentPageIndex}
+            onSelect={handleSelectPage}
+            onAdd={handleAddPage}
+            onDuplicate={handleDuplicatePage}
+            onDelete={handleDeletePage}
+            onExportPage={exportCurrentPageAsPNG}
+          />
+        )}
       </div>
       <div
         className="canvas-stage"
@@ -796,8 +886,8 @@ const CanvasWorkspace = ({
           onBackgroundColorChange={setBackgroundColor}
           pageSize={pageSize}
           onPageSizeChange={setPageSize}
-          onExportPNG={exportAsPNG}
-          onExportPDF={exportAsPDF}
+          onExportPNG={exportCurrentPageAsPNG}
+          onExportPDF={exportAllPagesAsPDF}
           onClose={() => setShowSettings(false)}
         />
       )}

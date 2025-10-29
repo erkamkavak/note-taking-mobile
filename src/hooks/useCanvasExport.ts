@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import type { RefObject } from 'react'
-import type { Stroke } from '../types/note'
+import type { Stroke, Page } from '../types/note'
 import type { SelectionState } from '../tools'
 import { cloneStrokes } from '../utils/canvasDrawing'
 
@@ -113,34 +113,54 @@ export const useCanvasExport = ({
     link.click()
   }, [currentNoteTitle, exportCanvas])
 
-  const exportAsPDF = useCallback(async () => {
-    const exportResult = exportCanvas()
-    if (!exportResult) return
+  // Render a given Page using current canvas size and drawing primitive
+  const renderPageToCanvas = useCallback(
+    (page: Page): HTMLCanvasElement | null => {
+      const ratio = window.devicePixelRatio || 1
+      const { width, height } = canvasSizeRef.current
+      const exportCanvasEl = document.createElement('canvas')
+      exportCanvasEl.width = width * ratio
+      exportCanvasEl.height = height * ratio
+      const ctx = exportCanvasEl.getContext('2d')
+      if (!ctx) return null
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+      ctx.fillStyle = page.backgroundColor || '#FAFAFA'
+      ctx.fillRect(0, 0, width, height)
+      cloneStrokes(page.strokes).forEach((s) => drawStroke(ctx, s))
+      return exportCanvasEl
+    },
+    [canvasSizeRef, drawStroke],
+  )
 
-    try {
-      const { jsPDF } = await import('jspdf')
-      const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: 'a4' })
-      const imgData = exportResult.dataUrl
-      const pdfWidth = pdf.internal.pageSize.getWidth()
-      const pdfHeight = pdf.internal.pageSize.getHeight()
-      const img = new Image()
-
-      img.onload = () => {
-        const ratio = Math.min(pdfWidth / img.width, pdfHeight / img.height, 1)
-        const finalWidth = img.width * ratio
-        const finalHeight = img.height * ratio
-        const x = (pdfWidth - finalWidth) / 2
-        const y = (pdfHeight - finalHeight) / 2
-        pdf.addImage(imgData, 'PNG', x, y, finalWidth, finalHeight)
-        pdf.save(sanitizeFileName(currentNoteTitle, 'pdf'))
+  // Export multiple pages as a single multi-page PDF
+  const exportPagesAsPDF = useCallback(
+    async (pages: Page[], title?: string) => {
+      if (!pages || pages.length === 0) return
+      try {
+        const { jsPDF } = await import('jspdf')
+        const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: 'a4' })
+        pages.forEach((p, idx) => {
+          const cnv = renderPageToCanvas(p)
+          if (!cnv) return
+          const imgData = cnv.toDataURL('image/png')
+          const pdfWidth = pdf.internal.pageSize.getWidth()
+          const pdfHeight = pdf.internal.pageSize.getHeight()
+          const ratio = Math.min(pdfWidth / cnv.width, pdfHeight / cnv.height)
+          const finalW = cnv.width * ratio
+          const finalH = cnv.height * ratio
+          const x = (pdfWidth - finalW) / 2
+          const y = (pdfHeight - finalH) / 2
+          if (idx > 0) pdf.addPage()
+          pdf.addImage(imgData, 'PNG', x, y, finalW, finalH)
+        })
+        const filename = sanitizeFileName(title ?? currentNoteTitle, 'pdf')
+        pdf.save(filename)
+      } catch (e) {
+        console.error('PDF export failed', e)
       }
-
-      img.src = imgData
-    } catch (error) {
-      console.error('Failed to export PDF:', error)
-      exportAsPNG()
-    }
-  }, [currentNoteTitle, exportAsPNG, exportCanvas])
+    },
+    [currentNoteTitle, renderPageToCanvas],
+  )
 
   const createSelectionCanvas = useCallback(
     (strokeIds: string[]) => {
@@ -247,8 +267,9 @@ export const useCanvasExport = ({
   return {
     exportCanvas,
     exportAsPNG,
-    exportAsPDF,
     copySelectionAsImage,
     shareSelectionAsImage,
+    renderPageToCanvas,
+    exportPagesAsPDF,
   }
 }
