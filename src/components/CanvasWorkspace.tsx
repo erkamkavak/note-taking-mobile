@@ -14,6 +14,8 @@ import PageControls from './PageControls'
 import Toolbar from './Toolbar'
 import Settings from './Settings'
 import DebugPanel from './DebugPanel'
+import SelectionActions from './SelectionActions'
+import EraserIndicator from './EraserIndicator'
 import { useCanvasRenderer } from '../hooks/useCanvasRenderer'
 import { usePointerHandlers } from '../hooks/usePointerHandlers'
 import { useCanvasExport } from '../hooks/useCanvasExport'
@@ -243,6 +245,7 @@ const CanvasWorkspace = ({
     eraserPreview,
     fadingStrokes,
     backgroundColor,
+    viewportScale: viewport.scale,
   })
 
   const stagePadding = useMemo(() => {
@@ -490,6 +493,9 @@ const CanvasWorkspace = ({
 
   const handleToolChange = useCallback((newTool: ToolType) => {
     setTool(newTool)
+    // Clear selection when changing tools
+    setSelection(null)
+    setSelectionPath([])
   }, [])
 
   const handleSettingsClick = useCallback(() => {
@@ -676,11 +682,13 @@ const CanvasWorkspace = ({
 
   const selectionActionPosition = useMemo(() => {
     if (!selection) return null
+    const deltaX = selection.dragDelta?.x ?? 0
+    const deltaY = selection.dragDelta?.y ?? 0
     const { minX, maxX, minY } = selection.boundingBox
     const centerX = (minX + maxX) / 2
     return {
-      x: centerX,
-      y: minY,
+      x: centerX + deltaX,
+      y: minY + deltaY,
     }
   }, [selection])
 
@@ -814,58 +822,50 @@ const CanvasWorkspace = ({
             transformOrigin: '0 0',
             touchAction: 'none',
           }}
+          onClick={() => {
+            // Clear selection when clicking on empty canvas area
+            if (selection) {
+              setSelection(null)
+              setSelectionPath([])
+            }
+          }}
         >
           <canvas
             ref={canvasRef}
             style={{
               touchAction: 'none',
             }}
+            onClick={(e) => {
+              e.stopPropagation()
+              // Selection will be cleared by the parent div's onClick handler if needed
+            }}
           />
-          {selection &&
-            selection.strokeIds.length > 0 &&
-            selectionActionPosition && (
-              <div
-                className="selection-actions"
-                style={{
-                  left: `${selectionActionPosition.x}px`,
-                  top: `${selectionActionPosition.y}px`,
-                }}
-              >
-                <div className="selection-actions__label">Selection</div>
-                <div className="selection-actions__colors">
-                  {SELECTION_COLORS.map((color) => (
-                    <button
-                      type="button"
-                      key={`selection-color-${color}`}
-                      className={`selection-color${
-                        selectionActiveColor === color ? ' active' : ''
-                      }`}
-                      style={{ backgroundColor: color }}
-                      onClick={() => handleSelectionColorChange(color)}
-                      aria-label={`Change selection color to ${color}`}
-                    />
-                  ))}
-                </div>
-                <div className="selection-actions__buttons">
-                  <button type="button" onClick={copySelectionAsImage}>
-                    Copy PNG
-                  </button>
-                  <button type="button" onClick={shareSelectionAsImage}>
-                    Share
-                  </button>
-                </div>
-              </div>
-            )}
-          {eraserIndicator && eraserIndicatorPosition && (
-            <div
-              key={eraserIndicator.pulseKey}
-              className={`eraser-indicator${eraserIndicator.isActive ? ' is-active' : ''}`}
-              style={{
-                width: `${eraserSize * viewport.scale}px`,
-                height: `${eraserSize * viewport.scale}px`,
-                left: `${eraserIndicatorPosition.x - (eraserSize * viewport.scale) / 2}px`,
-                top: `${eraserIndicatorPosition.y - (eraserSize * viewport.scale) / 2}px`,
+          {selection && selection.strokeIds.length > 0 && selectionActionPosition && (
+            <SelectionActions
+              position={selectionActionPosition}
+              scale={viewport.scale}
+              activeColor={selectionActiveColor}
+              colors={SELECTION_COLORS}
+              onPickColor={handleSelectionColorChange}
+              onCopy={copySelectionAsImage}
+              onShare={shareSelectionAsImage}
+              onDelete={() => {
+                if (!selection) return
+                const ids = new Set(selection.strokeIds)
+                pushHistorySnapshot()
+                setStrokes((prev) => prev.filter((s) => !ids.has(s.id)))
+                setSelection(null)
+                setSelectionPath([])
               }}
+            />
+          )}
+          {eraserIndicator && eraserIndicatorPosition && (
+            <EraserIndicator
+              key={eraserIndicator.pulseKey}
+              x={eraserIndicatorPosition.x}
+              y={eraserIndicatorPosition.y}
+              sizePx={Math.max(18, eraserSize / Math.max(0.001, viewport.scale))}
+              active={eraserIndicator.isActive}
             />
           )}
         </div>

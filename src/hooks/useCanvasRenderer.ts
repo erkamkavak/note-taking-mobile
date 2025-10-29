@@ -16,6 +16,7 @@ type UseCanvasRendererProps = {
   eraserPreview: EraserPreviewState
   fadingStrokes: Record<string, boolean>
   backgroundColor?: string
+  viewportScale?: number
 }
 
 export const useCanvasRenderer = ({
@@ -26,6 +27,7 @@ export const useCanvasRenderer = ({
   eraserPreview,
   fadingStrokes,
   backgroundColor = '#FAFAFA',
+  viewportScale = 1,
 }: UseCanvasRendererProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -158,8 +160,9 @@ export const useCanvasRenderer = ({
       context.save()
       context.fillStyle = 'rgba(0, 0, 0, 0.04)'
       context.strokeStyle = '#000000'
-      context.lineWidth = 1.2
-      context.setLineDash([8, 5])
+      const s = Math.max(0.001, viewportScale)
+      context.lineWidth = 1.2 / s
+      context.setLineDash([8 / s, 5 / s])
       context.beginPath()
       const startPoint = selectionPath[0]
       context.moveTo(startPoint?.x ?? 0, startPoint?.y ?? 0)
@@ -183,8 +186,9 @@ export const useCanvasRenderer = ({
       context.save()
       context.fillStyle = 'rgba(0, 0, 0, 0.04)'
       context.strokeStyle = '#000000'
-      context.lineWidth = 1.2
-      context.setLineDash([8, 5])
+      const s = Math.max(0.001, viewportScale)
+      context.lineWidth = 1.2 / s
+      context.setLineDash([8 / s, 5 / s])
       context.beginPath()
       context.moveTo(polygon[0]?.x ?? 0, polygon[0]?.y ?? 0)
       for (let i = 1; i < polygon.length; i += 1) {
@@ -207,6 +211,7 @@ export const useCanvasRenderer = ({
     selectionPath,
     strokes,
     backgroundColor,
+    viewportScale,
   ])
 
   const renderCanvasRef = useRef(renderCanvas)
