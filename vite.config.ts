@@ -1,18 +1,21 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { tanstackStart } from '@tanstack/react-start/plugin/vite'
+import viteReact from '@vitejs/plugin-react'
+import viteTsConfigPaths from 'vite-tsconfig-paths'
+import tailwindcss from '@tailwindcss/vite'
+import { cloudflare } from '@cloudflare/vite-plugin'
 
-// https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    host: '0.0.0.0', // Allow external access
-    port: 5173,       // Specify port (optional)
-    watch: {
-      usePolling: false, // Disable polling for better stability
-      interval: 1000,
-    },
-    hmr: {
-      overlay: false, // Disable HMR overlay on external devices
-    },
-  },
+const config = defineConfig({
+  plugins: [
+    cloudflare({ viteEnvironment: { name: 'ssr' } }),
+    // this is the plugin that enables path aliases
+    viteTsConfigPaths({
+      projects: ['./tsconfig.json'],
+    }),
+    tailwindcss(),
+    tanstackStart(),
+    viteReact(),
+  ],
 })
+
+export default config
