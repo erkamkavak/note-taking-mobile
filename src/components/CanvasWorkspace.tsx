@@ -65,7 +65,6 @@ const MIN_SCALE = 0.6
 const MAX_SCALE = 3.5
 const ERASER_FADE_DURATION = 180
 const DEBUG_PANEL_ENABLED = false
-const CANVAS_EDGE_PADDING = 160
 const MIN_EDGE_PADDING = 48
 
 const getCanvasDimensions = (pageSize: PageSize) => {
@@ -102,7 +101,6 @@ const CanvasWorkspace = ({
   const fadeTimeoutsRef = useRef<Record<string, number>>({})
   const eraserIndicatorTimeoutRef = useRef<number | null>(null)
   const eraserActiveRef = useRef(false)
-
   // Detect mobile device and pen availability
   const isMobile = useMemo(() => {
     if (typeof window === 'undefined') return false
@@ -249,12 +247,15 @@ const CanvasWorkspace = ({
   })
 
   const stagePadding = useMemo(() => {
+    // Reduce padding significantly for better PDF rendering experience
+    // Use a more conservative padding that doesn't interfere with content viewing
     if (viewport.scale <= 1) return 0
     if (typeof window === 'undefined') return MIN_EDGE_PADDING
     const viewportMinDimension = Math.min(window.innerWidth, window.innerHeight)
+    // Reduce padding to 4% of viewport min dimension, with tighter constraints
     const dynamicPadding = Math.min(
-      CANVAS_EDGE_PADDING,
-      Math.max(MIN_EDGE_PADDING, Math.round(viewportMinDimension * 0.12)),
+      80, // Much lower max padding
+      Math.max(16, Math.round(viewportMinDimension * 0.04)), // 4% instead of 12%
     )
     return dynamicPadding
   }, [viewport.scale])
@@ -266,8 +267,10 @@ const CanvasWorkspace = ({
     if (bw && bh) {
       // Constrain width to viewport, derive height by precise aspect ratio
       return {
-        width: 'min(1200px, 96vw)',
-        height: 'auto',
+        width: `${bw}px`,
+        height: `${bh}px`,
+        maxWidth: 'min(1200px, 96vw)',
+        maxHeight: 'calc(100vh - 140px)',
         aspectRatio: `${bw} / ${bh}` as unknown as CSSProperties['aspectRatio'],
       }
     }
@@ -875,7 +878,6 @@ const CanvasWorkspace = ({
             onAdd={handleAddPage}
             onDuplicate={handleDuplicatePage}
             onDelete={handleDeletePage}
-            onExportPage={exportCurrentPageAsPNG}
           />
         )}
       </div>
