@@ -67,12 +67,31 @@ export const useCanvasExport = ({
     if (!exportContext) return null
 
     exportContext.setTransform(ratio, 0, 0, ratio, 0, 0)
+    exportContext.imageSmoothingEnabled = true
+    exportContext.imageSmoothingQuality = 'high'
     exportContext.fillStyle = '#FAFAFA'
     exportContext.fillRect(0, 0, width, height)
 
     const backgroundImage = backgroundImageRef.current
     if (backgroundImage) {
-      exportContext.drawImage(backgroundImage, 0, 0, width, height)
+      const imgW = backgroundImage.naturalWidth || backgroundImage.width
+      const imgH = backgroundImage.naturalHeight || backgroundImage.height
+      if (imgW && imgH) {
+        const scale = Math.min(width / imgW, height / imgH)
+        const drawW = imgW * scale
+        const drawH = imgH * scale
+        const dx = (width - drawW) / 2
+        const dy = (height - drawH) / 2
+        // Explicitly set quality for background image rendering
+        exportContext.imageSmoothingEnabled = true
+        exportContext.imageSmoothingQuality = 'high'
+        exportContext.drawImage(backgroundImage, dx, dy, drawW, drawH)
+      } else {
+        // Fallback to stretch if natural size is unavailable
+        exportContext.imageSmoothingEnabled = true
+        exportContext.imageSmoothingQuality = 'high'
+        exportContext.drawImage(backgroundImage, 0, 0, width, height)
+      }
     }
 
     cloneStrokes(strokes).forEach((stroke) => drawStroke(exportContext, stroke))
@@ -115,21 +134,64 @@ export const useCanvasExport = ({
 
   // Render a given Page using current canvas size and drawing primitive
   const renderPageToCanvas = useCallback(
-    (page: Page): HTMLCanvasElement | null => {
-      const ratio = window.devicePixelRatio || 1
-      const { width, height } = canvasSizeRef.current
+    async (page: Page): Promise<HTMLCanvasElement | null> => {
+      // Use a fixed, optimized resolution for PDF export instead of devicePixelRatio
+      // This significantly reduces file size while maintaining good quality
+      const exportDPI = 150 // Higher DPI for better quality
+      const fallbackWidth = canvasSizeRef.current?.width ?? 0
+      const fallbackHeight = canvasSizeRef.current?.height ?? 0
+      const resolvedWidth =
+        page.bgWidth ?? (fallbackWidth > 0 ? fallbackWidth : undefined) ?? 1280
+      const resolvedHeight =
+        page.bgHeight ?? (fallbackHeight > 0 ? fallbackHeight : undefined) ?? 720
+      const baseWidth = Math.max(1, resolvedWidth)
+      const baseHeight = Math.max(1, resolvedHeight)
       const exportCanvasEl = document.createElement('canvas')
-      exportCanvasEl.width = width * ratio
-      exportCanvasEl.height = height * ratio
+      // Scale to 150 DPI for optimal file size/quality balance
+      exportCanvasEl.width = Math.round((baseWidth * exportDPI) / 96)
+      exportCanvasEl.height = Math.round((baseHeight * exportDPI) / 96)
       const ctx = exportCanvasEl.getContext('2d')
       if (!ctx) return null
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+
+      // Scale context to match the new canvas resolution
+      ctx.setTransform(exportDPI / 96, 0, 0, exportDPI / 96, 0, 0)
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'high'
       ctx.fillStyle = page.backgroundColor || '#FAFAFA'
-      ctx.fillRect(0, 0, width, height)
+      ctx.fillRect(0, 0, baseWidth, baseHeight)
+
+      let backgroundImage: HTMLImageElement | null = null
+      const loadImage = (src: string) =>
+        new Promise<HTMLImageElement | null>((resolve) => {
+          const img = new Image()
+          img.onload = () => resolve(img)
+          img.onerror = () => resolve(null)
+          img.src = src
+        })
+
+      if (page.thumbnailUrl) {
+        backgroundImage = await loadImage(page.thumbnailUrl)
+      } else if (backgroundImageRef.current?.src) {
+        backgroundImage = backgroundImageRef.current
+      }
+
+      if (backgroundImage) {
+        const imgW = backgroundImage.naturalWidth || backgroundImage.width
+        const imgH = backgroundImage.naturalHeight || backgroundImage.height
+        if (imgW && imgH) {
+          const scale = Math.min(baseWidth / imgW, baseHeight / imgH)
+          const drawW = imgW * scale
+          const drawH = imgH * scale
+          const dx = (baseWidth - drawW) / 2
+          const dy = (baseHeight - drawH) / 2
+          ctx.drawImage(backgroundImage, dx, dy, drawW, drawH)
+        }
+      }
+
       cloneStrokes(page.strokes).forEach((s) => drawStroke(ctx, s))
       return exportCanvasEl
     },
-    [canvasSizeRef, drawStroke],
+    [backgroundImageRef, canvasSizeRef, drawStroke],
   )
 
   // Export multiple pages as a single multi-page PDF
@@ -138,21 +200,37 @@ export const useCanvasExport = ({
       if (!pages || pages.length === 0) return
       try {
         const { jsPDF } = await import('jspdf')
-        const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: 'a4' })
-        pages.forEach((p, idx) => {
-          const cnv = renderPageToCanvas(p)
-          if (!cnv) return
-          const imgData = cnv.toDataURL('image/png')
-          const pdfWidth = pdf.internal.pageSize.getWidth()
-          const pdfHeight = pdf.internal.pageSize.getHeight()
-          const ratio = Math.min(pdfWidth / cnv.width, pdfHeight / cnv.height)
-          const finalW = cnv.width * ratio
-          const finalH = cnv.height * ratio
+
+        // First, determine the optimal orientation based on page dimensions
+        const firstPage = pages[0]
+        const firstCanvas = await renderPageToCanvas(firstPage)
+        if (!firstCanvas) return
+
+        const isLandscape = firstCanvas.width > firstCanvas.height
+        const orientation = isLandscape ? 'landscape' : 'portrait'
+
+        // Use A4 format and calculate dimensions
+        const pdf = new jsPDF({ orientation, unit: 'px', format: 'a4' })
+        const pdfWidth = pdf.internal.pageSize.getWidth()
+        const pdfHeight = pdf.internal.pageSize.getHeight()
+
+        for (let idx = 0; idx < pages.length; idx += 1) {
+          const cnv = await renderPageToCanvas(pages[idx])
+          if (!cnv) continue
+
+          // Use JPEG with 0.92 quality for optimal file size
+          // Combined with 150 DPI, this provides excellent quality with good compression
+          const imgData = cnv.toDataURL('image/jpeg', 0.92)
+
+          const scaleRatio = Math.min(pdfWidth / cnv.width, pdfHeight / cnv.height)
+          const finalW = cnv.width * scaleRatio
+          const finalH = cnv.height * scaleRatio
           const x = (pdfWidth - finalW) / 2
           const y = (pdfHeight - finalH) / 2
+
           if (idx > 0) pdf.addPage()
-          pdf.addImage(imgData, 'PNG', x, y, finalW, finalH)
-        })
+          pdf.addImage(imgData, 'JPEG', x, y, finalW, finalH)
+        }
         const filename = sanitizeFileName(title ?? currentNoteTitle, 'pdf')
         pdf.save(filename)
       } catch (e) {
