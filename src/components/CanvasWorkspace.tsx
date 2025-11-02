@@ -6,22 +6,22 @@ import {
   useState,
 } from 'react'
 import type { CSSProperties } from 'react'
-import type { Note, Stroke, StrokePoint, StrokeTool, PageSize } from '../types/note'
-import { translateStroke, cloneStrokes } from '../utils/canvasDrawing'
-import { PenTool, HighlighterTool, EraserTool, SelectorTool } from '../tools'
-import type { SelectionState } from '../tools'
+import type { Note, Stroke, StrokePoint, StrokeTool, PageSize } from '@/types/note'
+import { translateStroke, cloneStrokes } from '@/utils/canvasDrawing'
+import { PenTool, HighlighterTool, EraserTool, SelectorTool } from '@/tools'
+import type { SelectionState } from '@/tools'
 import PageControls from './PageControls'
 import Toolbar from './Toolbar'
 import Settings from './Settings'
 import DebugPanel from './DebugPanel'
 import SelectionActions from './SelectionActions'
 import EraserIndicator from './EraserIndicator'
-import { useCanvasRenderer } from '../hooks/useCanvasRenderer'
-import { usePointerHandlers } from '../hooks/usePointerHandlers'
-import { useCanvasExport } from '../hooks/useCanvasExport'
-import { useViewportZoom } from '../hooks/useViewportZoom'
-import { usePageNavigation } from '../hooks/usePageNavigation'
-import { loadSettings, persistSettings, type Settings as SettingsType } from '../utils/settingsStorage'
+import { useCanvasRenderer } from '@/hooks/useCanvasRenderer'
+import { usePointerHandlers } from '@/hooks/usePointerHandlers'
+import { useCanvasExport } from '@/hooks/useCanvasExport'
+import { useViewportZoom } from '@/hooks/useViewportZoom'
+import { usePageNavigation } from '@/hooks/usePageNavigation'
+import { loadSettings, persistSettings, type Settings as SettingsType } from '@/utils/settingsStorage'
 
 type ToolType = StrokeTool | 'selector'
 
@@ -259,7 +259,20 @@ const CanvasWorkspace = ({
     return dynamicPadding
   }, [viewport.scale])
 
-  const canvasDimensions = useMemo(() => getCanvasDimensions(pageSize), [pageSize])
+  const canvasDimensions = useMemo(() => {
+    const page = activeNote?.pages?.[currentPageIndex]
+    const bw = page?.bgWidth
+    const bh = page?.bgHeight
+    if (bw && bh) {
+      // Constrain width to viewport, derive height by precise aspect ratio
+      return {
+        width: 'min(1200px, 96vw)',
+        height: 'auto',
+        aspectRatio: `${bw} / ${bh}` as unknown as CSSProperties['aspectRatio'],
+      }
+    }
+    return getCanvasDimensions(pageSize)
+  }, [activeNote?.pages, currentPageIndex, pageSize])
 
   // Force canvas re-render when background changes
   useEffect(() => {
@@ -443,23 +456,49 @@ const CanvasWorkspace = ({
     exportCanvasRef.current = exportCanvas
   }, [exportCanvas])
 
-  useEffect(() => {
-    if (strokes.length === 0 && !activeNote) return
-    if (!onUpdate) return
+  const autoSaveTimeoutRef = useRef<number | null>(null)
+  const lastPageSyncRef = useRef<{ noteId: string | null; pageIndex: number | null }>({
+    noteId: null,
+    pageIndex: null,
+  })
 
-    const timeoutId = setTimeout(() => {
-      const exportResult = exportCanvasRef.current()
+  const queueAutoSave = useCallback(() => {
+    if (!onUpdate) return
+    if (!activeNote) return
+    if (autoSaveTimeoutRef.current) {
+      window.clearTimeout(autoSaveTimeoutRef.current)
+    }
+
+    const delay = isMobile ? 1500 : 800
+    autoSaveTimeoutRef.current = window.setTimeout(() => {
+      autoSaveTimeoutRef.current = null
+      const exportResult = exportCanvasRef.current?.()
       if (!exportResult) return
 
-      onUpdate({
-        dataUrl: exportResult.dataUrl,
-        thumbnailUrl: exportResult.thumbnailUrl,
-        strokes: cloneStrokes(strokesRef.current),
-      })
-    }, isMobile ? 5000 : 2000)
+      const updatedPages: Note['pages'] | undefined = activeNote.pages
+        ? activeNote.pages.map((p, idx) =>
+            idx === currentPageIndex ? { ...p, strokes: cloneStrokes(strokesRef.current) } : p,
+          )
+        : undefined
 
-    return () => clearTimeout(timeoutId)
-  }, [strokes.length, activeNote?.id, onUpdate, isMobile])
+      const payload = {
+        dataUrl: exportResult.dataUrl,
+        thumbnailUrl: exportResult.thumbnailUrl ?? exportResult.dataUrl,
+        strokes: cloneStrokes(strokesRef.current),
+        ...(updatedPages
+          ? {
+              pages: updatedPages,
+              currentPageIndex,
+            }
+          : {}),
+      }
+      onUpdate(payload)
+    }, delay)
+  }, [activeNote, currentPageIndex, isMobile, onUpdate])
+
+  useEffect(() => {
+    queueAutoSave()
+  }, [queueAutoSave, strokes, currentStroke])
 
   const saveOnUnmountRef = useRef<() => void>(() => {})
 
@@ -607,6 +646,8 @@ const CanvasWorkspace = ({
 
     if (!noteChanged && !pageChanged) return
 
+    lastPageSyncRef.current = { noteId: null, pageIndex: null }
+
     loadedNoteIdRef.current = nextNoteId
     loadedPageIdRef.current = nextPageId
     setCurrentPageIndex(nextIndex)
@@ -617,8 +658,23 @@ const CanvasWorkspace = ({
     setPageSize(nextPage?.pageSize ?? 'vertical')
     setViewport({ scale: 1, offsetX: 0, offsetY: 0 })
 
-    backgroundImageRef.current = null
-    forceRender()
+    // Load background image for the current page if present
+    const bgUrl = nextPage?.thumbnailUrl
+    if (bgUrl) {
+      const img = new Image()
+      img.onload = () => {
+        backgroundImageRef.current = img
+        forceRender()
+      }
+      img.onerror = () => {
+        backgroundImageRef.current = null
+        forceRender()
+      }
+      img.src = bgUrl
+    } else {
+      backgroundImageRef.current = null
+      forceRender()
+    }
   }, [activeNote, forceRender, resetHistory])
 
   const handleUndo = useCallback(() => {
@@ -692,27 +748,47 @@ const CanvasWorkspace = ({
     }
   }, [selection])
 
-  // Persist updates to pages/currentPageIndex and note thumbnails periodically
+  const currentPage = activeNote?.pages?.[currentPageIndex]
+
+  // Persist page data when switching pages or after stroke batches
   useEffect(() => {
     if (!onUpdate) return
     if (!activeNote) return
-    const page = activeNote.pages?.[currentPageIndex]
-    if (!page) return
-    const timeoutId = setTimeout(() => {
-      const exportResult = exportCanvasRef.current?.()
-      const updatedPages: Note['pages'] = activeNote.pages.map((p, idx) =>
-        idx === currentPageIndex ? { ...p, strokes: cloneStrokes(strokesRef.current) } : p,
-      )
-      onUpdate({
-        dataUrl: exportResult?.dataUrl ?? activeNote.dataUrl,
-        thumbnailUrl: activeNote.thumbnailUrl,
-        strokes: cloneStrokes(strokesRef.current),
-        pages: updatedPages,
-        currentPageIndex,
-      })
-    }, isMobile ? 5000 : 2000)
-    return () => clearTimeout(timeoutId)
-  }, [activeNote, currentPageIndex, onUpdate, isMobile])
+    if (!currentPage) return
+
+    if (activeNote.currentPageIndex !== currentPageIndex) {
+      return
+    }
+
+    const noteId = activeNote.id
+    const alreadySynced =
+      lastPageSyncRef.current.noteId === noteId &&
+      lastPageSyncRef.current.pageIndex === currentPageIndex
+
+    if (alreadySynced) {
+      return
+    }
+
+    lastPageSyncRef.current = { noteId, pageIndex: currentPageIndex }
+
+    if (autoSaveTimeoutRef.current) {
+      window.clearTimeout(autoSaveTimeoutRef.current)
+      autoSaveTimeoutRef.current = null
+    }
+
+    const exportResult = exportCanvasRef.current?.()
+    const updatedPages: Note['pages'] = activeNote.pages.map((p, idx) =>
+      idx === currentPageIndex ? { ...p, strokes: cloneStrokes(strokesRef.current) } : p,
+    )
+
+    onUpdate({
+      dataUrl: exportResult?.dataUrl ?? activeNote.dataUrl,
+      thumbnailUrl: exportResult?.thumbnailUrl ?? exportResult?.dataUrl ?? activeNote.thumbnailUrl,
+      strokes: cloneStrokes(strokesRef.current),
+      pages: updatedPages,
+      currentPageIndex,
+    })
+  }, [activeNote, currentPage, currentPageIndex, onUpdate])
 
   const { selectPage, addPage, duplicatePage, deletePage } = usePageNavigation({
     activeNote,
@@ -808,6 +884,7 @@ const CanvasWorkspace = ({
         style={
           {
             '--stage-padding': `${stagePadding}px`,
+            overflow: 'visible',
             touchAction: 'none',
           } as CSSProperties
         }

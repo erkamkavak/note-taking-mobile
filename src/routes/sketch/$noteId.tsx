@@ -1,26 +1,15 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import CanvasWorkspace from '../../components/CanvasWorkspace'
-import type { Note, Stroke } from '../../types/note'
-import { loadNotes, persistNotes } from '../../utils/noteStorage'
+import { useCallback, useEffect, useMemo } from 'react'
+import CanvasWorkspace from '@/components/CanvasWorkspace'
+import type { Note, Stroke } from '@/types/note'
+import { useNotesStore } from '@/state/notesStore'
 
 export const Route = createFileRoute('/sketch/$noteId')({ component: SketchById })
 
 function SketchById() {
   const router = useRouter()
   const { noteId } = Route.useParams()
-  // Defer localStorage access to client to avoid SSR/CSR mismatch
-  const [notes, setNotes] = useState<Note[] | null>(null)
-  const [hydrated, setHydrated] = useState(false)
-
-  useEffect(() => {
-    setNotes(loadNotes())
-    setHydrated(true)
-  }, [])
-
-  useEffect(() => {
-    if (notes) persistNotes(notes)
-  }, [notes])
+  const { notes, hydrated, setNotes, persistNow } = useNotesStore()
 
   const activeNote = useMemo(
     () => (notes ? notes.find((n) => n.id === noteId) ?? null : null),
@@ -116,20 +105,22 @@ function SketchById() {
         }
       }
     },
-    [ensureId, generateNoteTitle, noteId, notes, router],
+    [ensureId, generateNoteTitle, noteId, notes, router, setNotes],
   )
 
   const handleSaveNote = useCallback(
     (data: { dataUrl: string; thumbnailUrl: string; strokes: Stroke[] }) => {
       handleUpdateNote(data)
+      persistNow()
       router.navigate({ to: '/' })
     },
-    [handleUpdateNote, router],
+    [handleUpdateNote, persistNow, router],
   )
 
   const handleBackToGallery = useCallback(() => {
+    persistNow()
     router.navigate({ to: '/' })
-  }, [router])
+  }, [persistNow, router])
 
   if (!hydrated || !notes) return null
   if (!activeNote) return null

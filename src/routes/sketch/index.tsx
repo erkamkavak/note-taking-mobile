@@ -1,21 +1,17 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Note } from '../../types/note'
-import { loadNotes, persistNotes } from '../../utils/noteStorage'
+import { useCallback, useEffect, useRef } from 'react'
+import type { Note } from '@/types/note'
+import { useNotesStore } from '@/state/notesStore'
 
 export const Route = createFileRoute('/sketch/')({ component: SketchEmpty })
 
 function SketchEmpty() {
   const router = useRouter()
-  const [notes, setNotes] = useState<Note[]>(() => loadNotes())
+  const { notes, setNotes, persistNow } = useNotesStore()
   const createdRef = useRef(false)
 
   const WHITE_PX =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8AABfMBVv6gS3QAAAAASUVORK5CYII='
-
-  useEffect(() => {
-    persistNotes(notes)
-  }, [notes])
 
   const ensureId = useCallback(() => {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -35,7 +31,7 @@ function SketchEmpty() {
     if (createdRef.current) return
     createdRef.current = true
     const createdAt = Date.now()
-    const nextIndex = notes.length + 1
+    const nextIndex = (notes?.length ?? 0) + 1
     const id = ensureId()
     const pageId = ensureId()
     const newNote: Note = {
@@ -56,14 +52,14 @@ function SketchEmpty() {
       ],
       currentPageIndex: 0,
     }
-    // Update state and persist synchronously so the next route can load it from localStorage
+    // Update state, then navigate to created note; persistence is handled centrally
     setNotes((prev) => {
-      const next = [newNote, ...prev]
-      persistNotes(next)
-      return next
+      const base = prev ?? []
+      return [newNote, ...base]
     })
+    persistNow()
     router.navigate({ to: '/sketch/$noteId', params: { noteId: id }, replace: true })
-  }, [ensureId, generateNoteTitle, notes.length, router])
+  }, [ensureId, generateNoteTitle, notes?.length, persistNow, router, setNotes])
 
   return null
 }
