@@ -2,8 +2,8 @@ import { HeadContent, Scripts, createRootRoute, Link } from '@tanstack/react-rou
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
 
-import appCss from '../styles.css?url'
-import legacyAppCss from '../App.css?url'
+import appCss from '@/styles.css?url'
+import legacyAppCss from '@/App.css?url'
 
 export const Route = createRootRoute({
   head: () => ({
