@@ -22,6 +22,8 @@ export type Page = {
   backgroundColor: string
   pageSize: PageSize
   thumbnailUrl?: string
+  bgWidth?: number
+  bgHeight?: number
 }
 
 export type Note = {

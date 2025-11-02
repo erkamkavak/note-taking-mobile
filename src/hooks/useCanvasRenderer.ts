@@ -43,8 +43,6 @@ export const useCanvasRenderer = ({
     const width = container.clientWidth
     const height = container.clientHeight
     const ratio = window.devicePixelRatio || 1
-
-    // Increase canvas resolution for better quality when zoomed
     // Use a higher resolution multiplier for better rendering quality
     const qualityMultiplier = Math.max(1, Math.min(ratio * 2, 4))
     
@@ -128,7 +126,19 @@ export const useCanvasRenderer = ({
     if (backgroundImage) {
       context.globalAlpha = 1
       context.globalCompositeOperation = 'source-over'
-      context.drawImage(backgroundImage, 0, 0, width, height)
+      const imgW = (backgroundImage as HTMLImageElement).naturalWidth || backgroundImage.width
+      const imgH = (backgroundImage as HTMLImageElement).naturalHeight || backgroundImage.height
+      if (imgW > 0 && imgH > 0) {
+        const scale = Math.min(width / imgW, height / imgH)
+        const drawW = imgW * scale
+        const drawH = imgH * scale
+        const dx = (width - drawW) / 2
+        const dy = (height - drawH) / 2
+        context.drawImage(backgroundImage, dx, dy, drawW, drawH)
+      } else {
+        // Fallback to stretch if natural size is unavailable
+        context.drawImage(backgroundImage, 0, 0, width, height)
+      }
     }
 
     const selectedIds = selection?.strokeIds ?? []
@@ -223,6 +233,14 @@ export const useCanvasRenderer = ({
     resizeCanvas()
     renderCanvasRef.current?.()
   }, [resizeCanvas])
+
+  // Recompute canvas resolution when zoom level changes for sharper rendering
+  useEffect(() => {
+    resizeCanvas()
+    requestAnimationFrame(() => {
+      renderCanvasRef.current?.()
+    })
+  }, [resizeCanvas, viewportScale])
 
   useEffect(() => {
     let rafId: number | null = null

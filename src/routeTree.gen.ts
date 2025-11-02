@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SketchIndexRouteImport } from './routes/sketch/index'
 import { Route as SketchNoteIdRouteImport } from './routes/sketch/$noteId'
+import { Route as ImportPdfRouteImport } from './routes/import/pdf'
 import { Route as DemoStartServerFuncsRouteImport } from './routes/demo/start.server-funcs'
 import { Route as DemoStartApiRequestRouteImport } from './routes/demo/start.api-request'
 import { Route as DemoApiNamesRouteImport } from './routes/demo/api.names'
@@ -33,6 +34,11 @@ const SketchIndexRoute = SketchIndexRouteImport.update({
 const SketchNoteIdRoute = SketchNoteIdRouteImport.update({
   id: '/sketch/$noteId',
   path: '/sketch/$noteId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImportPdfRoute = ImportPdfRouteImport.update({
+  id: '/import/pdf',
+  path: '/import/pdf',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DemoStartServerFuncsRoute = DemoStartServerFuncsRouteImport.update({
@@ -73,6 +79,7 @@ const DemoStartSsrDataOnlyRoute = DemoStartSsrDataOnlyRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/import/pdf': typeof ImportPdfRoute
   '/sketch/$noteId': typeof SketchNoteIdRoute
   '/sketch': typeof SketchIndexRoute
   '/demo/api/names': typeof DemoApiNamesRoute
@@ -85,6 +92,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/import/pdf': typeof ImportPdfRoute
   '/sketch/$noteId': typeof SketchNoteIdRoute
   '/sketch': typeof SketchIndexRoute
   '/demo/api/names': typeof DemoApiNamesRoute
@@ -98,6 +106,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/import/pdf': typeof ImportPdfRoute
   '/sketch/$noteId': typeof SketchNoteIdRoute
   '/sketch/': typeof SketchIndexRoute
   '/demo/api/names': typeof DemoApiNamesRoute
@@ -112,6 +121,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/import/pdf'
     | '/sketch/$noteId'
     | '/sketch'
     | '/demo/api/names'
@@ -124,6 +134,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/import/pdf'
     | '/sketch/$noteId'
     | '/sketch'
     | '/demo/api/names'
@@ -136,6 +147,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/import/pdf'
     | '/sketch/$noteId'
     | '/sketch/'
     | '/demo/api/names'
@@ -149,6 +161,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ImportPdfRoute: typeof ImportPdfRoute
   SketchNoteIdRoute: typeof SketchNoteIdRoute
   SketchIndexRoute: typeof SketchIndexRoute
   DemoApiNamesRoute: typeof DemoApiNamesRoute
@@ -181,6 +194,13 @@ declare module '@tanstack/react-router' {
       path: '/sketch/$noteId'
       fullPath: '/sketch/$noteId'
       preLoaderRoute: typeof SketchNoteIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/import/pdf': {
+      id: '/import/pdf'
+      path: '/import/pdf'
+      fullPath: '/import/pdf'
+      preLoaderRoute: typeof ImportPdfRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/demo/start/server-funcs': {
@@ -237,6 +257,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ImportPdfRoute: ImportPdfRoute,
   SketchNoteIdRoute: SketchNoteIdRoute,
   SketchIndexRoute: SketchIndexRoute,
   DemoApiNamesRoute: DemoApiNamesRoute,

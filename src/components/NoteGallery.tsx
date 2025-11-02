@@ -1,11 +1,20 @@
 import type { Note } from '../types/note'
 import NoteCard from './NoteCard'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 type NoteGalleryProps = {
   notes: Note[]
   onCreateNew: () => void
   onOpen: (note: Note) => void
   onDelete: (noteId: string) => void
+  onImportPdf: () => void
+  onImportWeb: () => void
 }
 
 const NoteGallery = ({
@@ -13,6 +22,8 @@ const NoteGallery = ({
   onCreateNew,
   onOpen,
   onDelete,
+  onImportPdf,
+  onImportWeb,
 }: NoteGalleryProps) => {
   return (
     <div className="gallery-screen">
@@ -23,17 +34,24 @@ const NoteGallery = ({
             Capture ideas with a paper-like handwriting experience.
           </p>
         </div>
-        <button type="button" className="primary-button" onClick={onCreateNew}>
-          New Note
-        </button>
+        <div className="flex gap-2 items-center">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">Import</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={onImportPdf}>Import from PDF</DropdownMenuItem>
+              <DropdownMenuItem onSelect={onImportWeb}>Import from Web Page</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button onClick={onCreateNew}>New Note</Button>
+        </div>
       </header>
 
       {notes.length === 0 ? (
         <div className="empty-state">
           <p>Your handwritten notes will live here. Create your first note!</p>
-          <button type="button" className="ghost-button" onClick={onCreateNew}>
-            Start Drawing
-          </button>
+          <Button variant="outline" onClick={onCreateNew}>Start Drawing</Button>
         </div>
       ) : (
         <section className="note-grid">
