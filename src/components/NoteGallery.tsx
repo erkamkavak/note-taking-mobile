@@ -13,6 +13,7 @@ type NoteGalleryProps = {
   onCreateNew: () => void
   onOpen: (note: Note) => void
   onDelete: (noteId: string) => void
+  onExport: (note: Note) => void
   onImportPdf: () => void
   onImportWeb: () => void
 }
@@ -22,6 +23,7 @@ const NoteGallery = ({
   onCreateNew,
   onOpen,
   onDelete,
+  onExport,
   onImportPdf,
   onImportWeb,
 }: NoteGalleryProps) => {
@@ -61,6 +63,7 @@ const NoteGallery = ({
               note={note}
               onOpen={onOpen}
               onDelete={(item) => onDelete(item.id)}
+              onExport={onExport}
             />
           ))}
         </section>

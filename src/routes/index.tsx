@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { useNotesStore } from '@/state/notesStore'
+import { exportNoteAsPdf } from '@/utils/noteExport'
 
 export const Route = createFileRoute('/')({ component: App })
 
@@ -41,6 +42,10 @@ function App() {
     },
     [persistNow, setNotes],
   )
+
+  const handleExport = useCallback((note: Note) => {
+    void exportNoteAsPdf(note)
+  }, [])
 
   const handleImportPdf = useCallback(() => {
     router.navigate({ to: '/import/pdf' })
@@ -83,6 +88,7 @@ function App() {
         onCreateNew={handleCreateNew}
         onOpen={handleOpen}
         onDelete={handleDelete}
+        onExport={handleExport}
         onImportPdf={handleImportPdf}
         onImportWeb={handleImportWeb}
       />
