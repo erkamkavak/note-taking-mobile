@@ -2,7 +2,8 @@ import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useNotesStore } from '@/state/notesStore'
-import type { Note, Page, PageSize } from '@/types/note'
+import type { Note, Page } from '@/types/note'
+import { renderPdfDocumentPages, type RenderedPdfPage } from '@/utils/pdfRendering'
 
 export const Route = createFileRoute('/import/pdf')({ component: ImportPdf })
 
@@ -10,9 +11,7 @@ function ImportPdf() {
   const router = useRouter()
   const { setNotes, persistNow } = useNotesStore()
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const [pages, setPages] = useState<string[]>([])
-  const [pageSizes, setPageSizes] = useState<PageSize[]>([])
-  const [bgDims, setBgDims] = useState<Array<{ w: number; h: number }>>([])
+  const [pages, setPages] = useState<RenderedPdfPage[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -52,43 +51,9 @@ function ImportPdf() {
         cMapPacked: true,
       })
       const doc = await loadingTask.promise
-      const urls: string[] = []
-      const sizes: PageSize[] = []
-      const dims: Array<{ w: number; h: number }> = []
-
-      for (let i = 1; i <= doc.numPages; i++) {
-        const page = await doc.getPage(i)
-        // Reduced scale to prevent localStorage quota exceeded
-        const viewport = page.getViewport({ scale: 1.5 })
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        if (!ctx) {
-          throw new Error('Could not get canvas context')
-        }
-        canvas.width = Math.floor(viewport.width)
-        canvas.height = Math.floor(viewport.height)
-
-        await page.render({
-          canvasContext: ctx,
-          viewport: viewport,
-          intent: 'display'
-        }).promise
-
-        // Use JPEG with 0.85 quality to reduce file size
-        urls.push(canvas.toDataURL('image/jpeg', 0.85))
-        const ratio = viewport.width / viewport.height
-        const size: PageSize = ratio > 1.15 ? 'horizontal' : ratio < 0.85 ? 'vertical' : 'square'
-        sizes.push(size)
-        dims.push({ w: canvas.width, h: canvas.height })
-
-        // Release resources
-        canvas.width = 0
-        canvas.height = 0
-      }
-
-      setPages(urls)
-      setPageSizes(sizes)
-      setBgDims(dims)
+      const renderedPages = await renderPdfDocumentPages(doc)
+      doc.cleanup?.()
+      setPages(renderedPages)
     } catch (e: any) {
       console.error('PDF rendering error:', e)
       setError(`Failed to render PDF: ${e?.message || 'Unknown error'}. Please make sure the file is a valid PDF.`)
@@ -100,19 +65,22 @@ function ImportPdf() {
   const handleCreateNote = async () => {
     if (pages.length === 0) return
     const now = Date.now()
-    const notePages: Page[] = pages.map((dataUrl, i) => ({
+    const notePages: Page[] = pages.map((page, i) => ({
       id: `page-${i + 1}`,
       strokes: [],
       backgroundColor: '#FFFFFF',
-      pageSize: pageSizes[i] ?? ('vertical' as const),
-      thumbnailUrl: dataUrl,
-      bgWidth: bgDims[i]?.w,
-      bgHeight: bgDims[i]?.h,
+      pageSize: page.size,
+      thumbnailUrl: page.full,
+      bgWidth: page.dims.w,
+      bgHeight: page.dims.h,
     }))
+    const cover = pages[0]
+    const coverFull = cover?.full ?? cover?.preview
+    const coverPreview = cover?.preview ?? cover?.full
     const newNote: Note = {
       id: `note-${now}`,
-      dataUrl: pages[0],
-      thumbnailUrl: pages[0],
+      dataUrl: coverFull,
+      thumbnailUrl: coverPreview,
       title: `Imported PDF – ${new Date(now).toLocaleDateString()}`,
       createdAt: now,
       updatedAt: now,
@@ -133,9 +101,9 @@ function ImportPdf() {
 
   const preview = useMemo(() => (
     <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-      {pages.map((src, i) => (
+      {pages.map((page, i) => (
         <div key={i} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 8, boxShadow: '0 6px 18px rgba(0,0,0,0.06)' }}>
-          <img src={src} style={{ width: '100%', borderRadius: 8 }} />
+          <img src={page.preview} style={{ width: '100%', borderRadius: 8 }} />
         </div>
       ))}
     </div>

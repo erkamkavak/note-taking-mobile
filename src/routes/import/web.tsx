@@ -3,7 +3,8 @@ import { normalizeUrl, isValidHttpUrl } from '@/server/import/common'
 import { staticCapture } from '@/server/import/staticCapture'
 import { summarizedToPdf } from '@/server/import/summarized'
 import { simplifiedToPdf } from '@/server/import/simplified'
-import type { Note, Page, PageSize } from '@/types/note'
+import type { Note, Page } from '@/types/note'
+import { renderPdfDocumentPages, type RenderedPdfPage } from '@/utils/pdfRendering'
 import { z } from 'zod'
 
 const importWebPageSchema = z.object({
@@ -101,69 +102,31 @@ export async function importWebAndCreateNoteClient(params: {
       throw new Error(`PDF parsed but has ${doc.numPages} pages`)
     }
 
-    const urls: string[] = []
-    const sizes: PageSize[] = []
-    const dims: Array<{ w: number; h: number }> = []
+    const renderedPages: RenderedPdfPage[] = await renderPdfDocumentPages(doc)
+    doc.cleanup?.()
 
-    for (let i = 1; i <= doc.numPages; i++) {
-      
-      const page = await doc.getPage(i)
-      // Reduced scale to prevent localStorage quota exceeded
-      const viewport = page.getViewport({ scale: 1.5 })
-      
-
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('Could not get canvas context')
-
-      canvas.width = Math.floor(viewport.width)
-      canvas.height = Math.floor(viewport.height)
-      
-
-      await page.render({ canvasContext: ctx, viewport, intent: 'display' }).promise
-      
-
-      // Use JPEG with 0.85 quality to reduce file size
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-      
-
-      if (!dataUrl || dataUrl.length < 100) {
-        throw new Error(`Page ${i} generated invalid/empty data URL`)
-      }
-
-      urls.push(dataUrl)
-      const ratio = viewport.width / viewport.height
-      const size: PageSize = ratio > 1.15 ? 'horizontal' : ratio < 0.85 ? 'vertical' : 'square'
-      sizes.push(size)
-      dims.push({ w: canvas.width, h: canvas.height })
-
-      // Release resources
-      canvas.width = 0
-      canvas.height = 0
-    }
-
-    
-
-    if (urls.length === 0) throw new Error('The generated PDF has no pages')
+    if (renderedPages.length === 0) throw new Error('The generated PDF has no pages')
 
     // Build note and persist
     const now = Date.now()
-    const notePages: Page[] = urls.map((dataUrl, i) => ({
+    const notePages: Page[] = renderedPages.map((page, i) => ({
       id: `page-${i + 1}`,
       strokes: [],
       backgroundColor: '#FFFFFF',
-      pageSize: sizes[i] ?? ('vertical' as const),
-      thumbnailUrl: dataUrl,
-      bgWidth: dims[i]?.w,
-      bgHeight: dims[i]?.h,
+      pageSize: page.size,
+      thumbnailUrl: page.full,
+      bgWidth: page.dims.w,
+      bgHeight: page.dims.h,
     }))
 
-    
+    const cover = renderedPages[0]
+    const coverFull = cover?.full ?? cover?.preview ?? ''
+    const coverPreview = cover?.preview ?? cover?.full ?? ''
 
     const newNote: Note = {
       id: `note-${now}`,
-      dataUrl: urls[0],
-      thumbnailUrl: urls[0],
+      dataUrl: coverFull,
+      thumbnailUrl: coverPreview,
       title: `${response.filename || 'Imported Webpage'} – ${new Date(now).toLocaleDateString()}`,
       createdAt: now,
       updatedAt: now,
